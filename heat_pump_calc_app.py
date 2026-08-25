@@ -12,12 +12,23 @@ UI：浅色科技风｜玻璃拟态｜清爽高亮｜大屏展示
 方案1：仅更换空气源热泵，围护不改造（基准方案）
 方案2：围护结构保温改造 + 常规空气源热泵
 方案3：围护改造 + 低温采暖末端 + 低温型空气源热泵
+新增创新点：
+创新1：工程约束开关「是否允许外墙围护改造」，禁止时屏蔽方案2、3
+创新2：电价、保温造价敏感性分析，观察参数波动对静态回收期影响
+创新3：多维度雷达图综合打分（投资、回收期、节能率、减碳、施工难度）
+创新4：季节SPF动态计算模型，铭牌SCOP×冬季低温衰减系数
+创新5：分户改造 / 整栋集中改造模式切换，造价系数自动修正
 新增：热泵额定制热负荷比对，判断是否需要辅助电加热；运行阶段碳排放核算GB/T51366‑2019
 """
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-
+import plotly.graph_objects as go
+###====新增：改造模式造价系数配置 创新5====
+RETROFIT_MODE_CFG = {
+    "分户独立改造": {"wall_factor":1.00, "pump_factor":1.00, "end_factor":1.00},
+    "整栋集中批量改造": {"wall_factor":0.75, "pump_factor":0.85, "end_factor":0.80}
+}
 # ====================== 全局初始化持久参数 ======================
 DEFAULT_BUILD = {
     "area": 120.0, "floor_h": 2.8, "volume": 120*2.8, "wall": 85.0, "win": 22.0,
@@ -26,7 +37,12 @@ DEFAULT_BUILD = {
     "n": 0.5, "rho": 1.2, "cp": 1005
 }
 DEFAULT_EQUIP = {
-    "SCOP1":2.6, "SCOP2":2.6, "SCOP3":3.2,
+    "SCOP_nameplate1":2.6,   ###====新增：铭牌SCOP====
+    "SCOP_nameplate2":2.6,
+    "SCOP_nameplate3":3.2,
+    "spf_decay1":0.82,       ###====新增：冬季低温衰减系数====
+    "spf_decay2":0.82,
+    "spf_decay3":0.88,
     "elec_price":0.56,
     "cost_pump":12500,
     "cost_wall":14200,
@@ -44,20 +60,57 @@ if "build" not in st.session_state:
     st.session_state["build"] = DEFAULT_BUILD.copy()
 if "equip" not in st.session_state:
     st.session_state["equip"] = DEFAULT_EQUIP.copy()
-
+if "retrofit_mode" not in st.session_state: ###====新增：保存改造模式状态====
+    st.session_state["retrofit_mode"] = "分户独立改造"
+###====新增工具函数 创新4：季节SPF计算====
+def calc_season_spf(nameplate_scop, decay_factor):
+    """季节综合SPF = 铭牌SCOP × 冬季低温衰减系数，模拟郑州冬季低温热泵效率折减"""
+    return round(nameplate_scop * decay_factor, 3)
+###====新增代码开始【创新点工具函数】====
+def calc_sensitivity(base_wall_cost, base_elec_price, save_elec_2, save_elec_3, cost_lowend):
+    """创新2：敏感性分析，保温造价±20%，电价±0.1元，输出不同场景下回收期"""
+    scenes = []
+    wall_cost_list = [round(base_wall_cost*0.8,0), base_wall_cost, round(base_wall_cost*1.2,0)]
+    elec_price_list = [round(base_elec_price-0.1,2), base_elec_price, round(base_elec_price+0.1,2)]
+    for wc in wall_cost_list:
+        py2 = round(wc/(save_elec_2*base_elec_price),2) if save_elec_2>0 else None
+        py3 = round((wc+cost_lowend)/(save_elec_3*base_elec_price),2) if save_elec_3>0 else None
+        scenes.append({"场景":"保温造价:"+str(int(wc))+"元","电价":base_elec_price,"方案2回收期":py2,"方案3回收期":py3})
+    for ep in elec_price_list:
+        py2 = round(base_wall_cost/(save_elec_2*ep),2) if save_elec_2>0 else None
+        py3 = round((base_wall_cost+cost_lowend)/(save_elec_3*ep),2) if save_elec_3>0 else None
+        scenes.append({"场景":"电价:"+str(ep)+"元/kWh","电价":ep,"方案2回收期":py2,"方案3回收期":py3})
+    return pd.DataFrame(scenes)
+def get_radar_score(pay2,pay3,save_rate2,save_rate3,carbon_rate2,carbon_rate3,invest2,invest3):
+    """创新3：雷达图打分，分值0‑10分，分数越高越好"""
+    #方案1基准
+    s1 = {"初投资":10,"回收期":10,"节能率":0,"减碳":0,"施工难度":10}
+    #方案2
+    score_pay2 = max(0, 10 - (pay2/15)*10) if pay2 is not None else 0
+    score_save2 = save_rate2/100*10
+    score_carbon2 = carbon_rate2/100*10
+    score_inv2 = max(0,10-(invest2/60000)*10)
+    score_con2 = 4 #需要外墙改造，中等施工
+    s2={"初投资":score_inv2,"回收期":score_pay2,"节能率":score_save2,"减碳":score_carbon2,"施工难度":score_con2}
+    #方案3
+    score_pay3 = max(0,10-(pay3/15)*10) if pay3 is not None else 0
+    score_save3 = save_rate3/100*10
+    score_carbon3 = carbon_rate3/100*10
+    score_inv3 = max(0,10-(invest3/60000)*10)
+    score_con3 = 2 #围护+地暖，施工复杂
+    s3={"初投资":score_inv3,"回收期":score_pay3,"节能率":score_save3,"减碳":score_carbon3,"施工难度":score_con3}
+    return s1,s2,s3
+###====新增代码结束====
 def sync_build(key_widget, key_biz):
     st.session_state["build"][key_biz] = st.session_state[key_widget]
-
 def sync_equip(key_widget, key_biz):
     st.session_state["equip"][key_biz] = st.session_state[key_widget]
-
 # ====================== 全局页面基础配置 + 浅色科技CSS ======================
 st.set_page_config(
     page_title="郑州老旧住宅热泵协同改造测算工具",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 light_tech_style = """
 <style>
 /* 全局浅色科技背景 */
@@ -72,7 +125,6 @@ light_tech_style = """
 }
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
-
 .light-tech-title {
     background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,250,255,0.95));
     border: 1px solid rgba(99, 102, 241, 0.35);
@@ -94,7 +146,6 @@ footer {visibility: hidden;}
     color: #64748b;
     margin: 0;
 }
-
 [data-testid="stMetric"] {
     background: #ffffff;
     border: 1px solid #e2e8f0;
@@ -118,7 +169,6 @@ div[data-testid="stMetricDelta"] > div {
     color: #10b981 !important;
     font-weight: 600;
 }
-
 .st-data-frame {
     background: #ffffff !important;
     border: 1px solid #e2e8f0 !important;
@@ -128,7 +178,6 @@ div[data-testid="stMetricDelta"] > div {
     background: linear-gradient(90deg, #6366f1, #8b5cf6) !important;
     color: #ffffff !important;
 }
-
 div[data-baseweb="input"] {
     background-color: #ffffff !important;
     border: 1px solid #cbd5e1 !important;
@@ -163,7 +212,6 @@ button[kind="primary"] {
 </style>
 """
 st.markdown(light_tech_style, unsafe_allow_html=True)
-
 # 侧边栏
 with st.sidebar:
     st.markdown("""
@@ -171,6 +219,11 @@ with st.sidebar:
 <h3 style="color:#6366f1;margin:0;">📌 参数来源台账</h3>
 </div>
 """, unsafe_allow_html=True)
+    ###====新增：改造模式选择 创新5====
+    st.session_state["retrofit_mode"] = st.selectbox("🔧改造造价模式", list(RETROFIT_MODE_CFG.keys()))
+    mode_factor = RETROFIT_MODE_CFG[st.session_state["retrofit_mode"]]
+    st.info(f"当前模式造价系数｜外墙:{mode_factor['wall_factor']}｜热泵:{mode_factor['pump_factor']}｜末端:{mode_factor['end_factor']}")
+    st.divider()
     st.markdown("""
     1. 建筑传热系数K：《民用建筑热工设计规范》GB 50176、中原地区老旧住宅实测文献
     2. 郑州采暖度日数HDD18：中国建筑节能气象参数数据库
@@ -178,6 +231,7 @@ with st.sidebar:
     4. 电价、改造材料费：河南郑州市场家装/旧房改造市场价调研
     5. 热负荷计算公式：《供热工程》教材经典稳态传热负荷公式
     6. 碳排放：GB/T51366‑2019建筑碳排放计算标准，电网排放因子取全国平均因子
+    7. 季节SPF：铭牌SCOP×冬季低温衰减系数，修正低温工况效率衰减
     """)
     st.divider()
     page_select = st.radio("功能页面切换", [
@@ -186,52 +240,43 @@ with st.sidebar:
         "3.三套方案计算结果",
         "4.手工校核验算页"
     ])
-
 # ====================== 全局通用计算公式 ======================
 def calc_wall_win_load(wall_area, win_area, K_wall, K_win, delta_T):
     wall_load = wall_area * K_wall * delta_T
     win_load = win_area * K_win * delta_T
     total_env_load = wall_load + win_load
     return wall_load, win_load, total_env_load
-
 def calc_infiltration_load(volume, n, rho, cp, delta_T):
     mass_flow = rho * volume * n / 3600
     infiltration_Q = mass_flow * cp * delta_T
     return infiltration_Q
-
 def total_heat_load(env_load, infil_load):
     total_W = env_load + infil_load
     total_kW = total_W / 1000
     return total_kW, total_W
-
 def calc_year_heat(total_W, HDD, indoor_T):
     day_hour = 24
     delta_T_day = indoor_T - 18
     year_heat_kwh = total_W * HDD * day_hour / (delta_T_day * 1000)
     return year_heat_kwh
-
 def elec_consume(year_heat, SCOP):
     elec = year_heat / SCOP
     return elec
-
 def payback_period(add_invest, save_elec, elec_price):
     if save_elec <= 0:
         return None
     year_save = save_elec * elec_price
     pay_year = add_invest / year_save
     return round(pay_year, 2)
-
 def check_aux_electric_heat(q_load_kw, q_hp_rated_kw):
     if q_hp_rated_kw >= q_load_kw:
         return False, 0.0
     else:
         aux_load = q_load_kw - q_hp_rated_kw
         return True, round(aux_load,2)
-
 def calc_carbon(elec_kwh, ef_kg_kwh):
     co2 = elec_kwh * ef_kg_kwh
     return round(co2,2)
-
 # ====================== 页面1：建筑围护参数录入 ======================
 if page_select == "1.建筑围护参数录入":
     st.markdown("""
@@ -240,7 +285,6 @@ if page_select == "1.建筑围护参数录入":
     <p>录入郑州老旧住宅建筑尺寸、传热系数、气象参数｜建筑围护组模块</p>
 </div>
 """, unsafe_allow_html=True)
-
     st.info("每一项输入框后的问号可查看物理意义、单位，由建筑围护组确定参数")
     build = st.session_state["build"]
     col1, col2 = st.columns(2)
@@ -327,41 +371,55 @@ if page_select == "1.建筑围护参数录入":
                         key="_cp",
                         on_change=sync_build, args=("_cp", "cp"),
                         help="干空气定压比热容")
-
     st.session_state["build"]["volume"] = st.session_state["build"]["area"] * st.session_state["build"]["floor_h"]
     st.session_state["build"]["dT"] = st.session_state["build"]["Tin"] - st.session_state["build"]["Tout"]
     st.success("✅ 建筑围护参数已保存，前往第二页录入热泵末端参数")
-
 # ====================== 页面2：末端&热泵参数录入【造价全部移到右侧】 ======================
 elif page_select == "2.采暖末端&热泵参数录入":
     st.markdown("""
 <div class="light-tech-title">
     <h1>🔥 采暖末端与空气源热泵机组参数录入</h1>
-    <p>SCOP｜额定制热量｜供水温度｜造价｜电价｜碳排放因子｜末端与热泵组模块</p>
+    <p>铭牌SCOP｜季节低温衰减系数｜额定制热量｜供水温度｜造价｜电价｜碳排放因子｜末端与热泵组模块</p>
 </div>
 """, unsafe_allow_html=True)
-
-    st.info("由末端与热泵组填写，SCOP、额定制热量取自厂家样本，造价取自市场调研；碳排放因子参考GB/T51366‑2019")
+    #====已经把💡创新点：三个字删掉====
+    st.info("区分【铭牌SCOP】和【季节SPF】；SPF = 铭牌SCOP × 冬季低温衰减系数，修正郑州冬季低温效率下降")
     equip = st.session_state["equip"]
     col_left, col_right = st.columns([1,1])
     with col_left:
-        st.subheader("空气源热泵SCOP（制热性能系数）")
-        st.number_input("方案1常规热泵SCOP",
-                        value=equip["SCOP1"],
-                        key="_SCOP1",
-                        on_change=sync_equip, args=("_SCOP1", "SCOP1"),
-                        help="常温空气源热泵冬季平均制热系数")
-        st.number_input("方案2常规热泵SCOP",
-                        value=equip["SCOP2"],
-                        key="_SCOP2",
-                        on_change=sync_equip, args=("_SCOP2", "SCOP2"),
-                        help="围护改造只降负荷，热泵机型不变，SCOP不变")
-        st.number_input("方案3低温专用热泵SCOP",
-                        value=equip["SCOP3"],
-                        key="_SCOP3",
-                        on_change=sync_equip, args=("_SCOP3", "SCOP3"),
-                        help="低温机型+低温地暖末端，供水温度低，机组效率更高")
-
+        st.subheader("空气源热泵铭牌SCOP（样本标称值）")
+        st.number_input("方案1常规热泵铭牌SCOP",
+                        value=equip["SCOP_nameplate1"],
+                        key="_SCOPnp1",
+                        on_change=sync_equip, args=("_SCOPnp1", "SCOP_nameplate1"),
+                        help="厂家样本铭牌制热SCOP，未考虑冬季低温衰减")
+        st.number_input("方案2常规热泵铭牌SCOP",
+                        value=equip["SCOP_nameplate2"],
+                        key="_SCOPnp2",
+                        on_change=sync_equip, args=("_SCOPnp2", "SCOP_nameplate2"),
+                        help="围护改造只降负荷，热泵机型不变，铭牌SCOP不变")
+        st.number_input("方案3低温专用热泵铭牌SCOP",
+                        value=equip["SCOP_nameplate3"],
+                        key="_SCOPnp3",
+                        on_change=sync_equip, args=("_SCOPnp3", "SCOP_nameplate3"),
+                        help="低温机型样本铭牌SCOP")
+        st.divider()
+        st.subheader("❄️冬季低温衰减系数(<1，用于计算季节SPF)")
+        st.number_input("方案1 衰减系数",
+                        value=equip["spf_decay1"],
+                        key="_decay1",
+                        on_change=sync_equip, args=("_decay1", "spf_decay1"),
+                        help="常规热泵冬季综合折减系数，一般0.75‑0.85")
+        st.number_input("方案2 衰减系数",
+                        value=equip["spf_decay2"],
+                        key="_decay2",
+                        on_change=sync_equip, args=("_decay2", "spf_decay2"),
+                        help="常规热泵冬季综合折减系数")
+        st.number_input("方案3 衰减系数",
+                        value=equip["spf_decay3"],
+                        key="_decay3",
+                        on_change=sync_equip, args=("_decay3", "spf_decay3"),
+                        help="低温型热泵衰减更小，取值更高0.85‑0.92")
         st.divider()
         st.subheader("🧪 热泵额定制热量(kW)")
         st.number_input("方案1热泵额定制热量 kW",
@@ -379,7 +437,6 @@ elif page_select == "2.采暖末端&热泵参数录入":
                         key="_Qhp_rated3",
                         on_change=sync_equip, args=("_Qhp_rated3", "Qhp_rated3"),
                         help="低温机型在室外-7℃额定制热量，厂家样本")
-
     with col_right:
         st.subheader("🌡️ 系统设计供水温度 ℃")
         st.number_input("方案1供水温度 ℃(原有散热器)",
@@ -397,9 +454,8 @@ elif page_select == "2.采暖末端&热泵参数录入":
                         key="_supply_temp3",
                         on_change=sync_equip, args=("_supply_temp3", "supply_temp3"),
                         help="低温地暖末端典型供水35‑42℃")
-
         st.divider()
-        st.subheader("♻️ 碳排放与造价参数")
+        st.subheader("♻️ 碳排放与造价参数（基准造价，会被改造模式系数自动修正）")
         st.number_input("电网碳排放因子 kgCO₂/kWh",
                         value=equip["grid_ef"],
                         key="_grid_ef",
@@ -414,23 +470,22 @@ elif page_select == "2.采暖末端&热泵参数录入":
                         value=equip["cost_pump"],
                         key="_cost_pump",
                         on_change=sync_equip, args=("_cost_pump", "cost_pump"),
-                        help="常规冷暖热泵整套造价")
+                        help="常规冷暖热泵整套基准造价")
         st.number_input("外墙保温改造总造价 元",
                         value=equip["cost_wall"],
                         key="_cost_wall",
                         on_change=sync_equip, args=("_cost_wall", "cost_wall"),
-                        help="全屋外墙保温施工材料费+人工费")
+                        help="全屋外墙保温施工基准材料费+人工费")
         st.number_input("低温地暖末端改造费用 元",
                         value=equip["cost_lowend"],
                         key="_cost_lowend",
                         on_change=sync_equip, args=("_cost_lowend", "cost_lowend"),
-                        help="全屋地暖铺设施工费用")
+                        help="全屋地暖铺设施工基准费用")
         st.number_input("业主改造费用预算 元",
                         value=equip["budget"],
                         key="_budget",
                         on_change=sync_equip, args=("_budget", "budget"),
                         help="业主可承受的改造总投资上限，用于与各方案初投资比对并筛选合适方案")
-
     st.success("✅ 末端热泵参数保存完毕，进入第三页一键计算三套方案")
 
 # ====================== 页面3：三套方案计算结果【卡片固定高度，大小完全相等对齐】 ======================
@@ -438,17 +493,29 @@ elif page_select == "3.三套方案计算结果":
     st.markdown("""
 <div class="light-tech-title">
     <h1>📊 三套改造方案全自动计算结果页面</h1>
-    <p>热负荷｜能耗｜供水温度｜辅助电加热｜碳排放｜图表｜方案推荐｜CSV结果导出</p>
+    <p>热负荷｜季节SPF｜能耗｜供水温度｜辅助电加热｜碳排放｜图表｜方案推荐｜CSV结果导出</p>
 </div>
 """, unsafe_allow_html=True)
-
     if "build" not in st.session_state or "equip" not in st.session_state:
         st.warning("⚠️ 请先在页面1录入建筑围护参数、页面2录入热泵末端参数后，再查看计算结果。")
         st.stop()
     build = st.session_state["build"]
     equip = st.session_state["equip"]
+    ###====创新1新增：工程约束开关====
+    allow_wall_retrofit = st.checkbox("✅允许外墙围护改造（若小区外立面限制可取消勾选）",value=True,help="取消勾选：禁止外墙保温，方案2、方案3不可实施，仅保留方案1")
+    if not allow_wall_retrofit:
+        st.warning("⚠️ 当前工程约束：不允许外墙围护改造，方案2、方案3已禁用，仅可使用方案1")
+    ###====新增：获取改造模式系数，计算季节SPF====
+    mode_factor = RETROFIT_MODE_CFG[st.session_state["retrofit_mode"]]
+    spf1 = calc_season_spf(equip["SCOP_nameplate1"], equip["spf_decay1"])
+    spf2 = calc_season_spf(equip["SCOP_nameplate2"], equip["spf_decay2"])
+    spf3 = calc_season_spf(equip["SCOP_nameplate3"], equip["spf_decay3"])
+    st.info(f"📌季节综合SPF：方案1={spf1}｜方案2={spf2}｜方案3={spf3}（铭牌SCOP×低温衰减系数）")
+    ###====新增：应用造价修正系数====
+    real_cost_pump = equip["cost_pump"] * mode_factor["pump_factor"]
+    real_cost_wall = equip["cost_wall"] * mode_factor["wall_factor"]
+    real_cost_lowend = equip["cost_lowend"] * mode_factor["end_factor"]
     st.divider()
-
     wall_load_1, win_load_1, env_total_1 = calc_wall_win_load(
         build["wall"], build["win"], build["Kw_old"], build["Kwin_old"], build["dT"]
     )
@@ -457,61 +524,57 @@ elif page_select == "3.三套方案计算结果":
     )
     total_kW_1, total_W_1 = total_heat_load(env_total_1, infil_load)
     year_heat_1 = calc_year_heat(total_W_1, build["HDD"], build["Tin"])
-    elec_1 = elec_consume(year_heat_1, equip["SCOP1"])
-    invest_1 = equip["cost_pump"]
+    elec_1 = elec_consume(year_heat_1, spf1) ###====使用季节SPF代替原SCOP====
+    invest_1 = real_cost_pump
     year_cost_1 = elec_1 * equip["elec_price"]
     need_aux1, aux_load1 = check_aux_electric_heat(total_kW_1, equip["Qhp_rated1"])
     co2_1 = calc_carbon(elec_1, equip["grid_ef"])
-
     wall_load_2, win_load_2, env_total_2 = calc_wall_win_load(
         build["wall"], build["win"], build["Kw_new"], build["Kwin_new"], build["dT"]
     )
     total_kW_2, total_W_2 = total_heat_load(env_total_2, infil_load)
     year_heat_2 = calc_year_heat(total_W_2, build["HDD"], build["Tin"])
-    elec_2 = elec_consume(year_heat_2, equip["SCOP2"])
-    invest_2 = equip["cost_pump"] + equip["cost_wall"]
+    elec_2 = elec_consume(year_heat_2, spf2) ###====使用季节SPF====
+    invest_2 = real_cost_pump + real_cost_wall
     year_cost_2 = elec_2 * equip["elec_price"]
     save_elec_2 = elec_1 - elec_2
-    payback_2 = payback_period(equip["cost_wall"], save_elec_2, equip["elec_price"])
+    payback_2 = payback_period(real_cost_wall, save_elec_2, equip["elec_price"])
     load_save_rate_2 = round((total_kW_1 - total_kW_2)/total_kW_1*100,2)
     elec_save_rate_2 = round((elec_1 - elec_2)/elec_1*100,2)
     need_aux2, aux_load2 = check_aux_electric_heat(total_kW_2, equip["Qhp_rated2"])
     co2_2 = calc_carbon(elec_2, equip["grid_ef"])
     co2_reduce_2 = round(co2_1 - co2_2,2)
     co2_reduce_rate_2 = round((co2_1 - co2_2)/co2_1*100,2) if co2_1>0 else 0
-
     wall_load_3, win_load_3, env_total_3 = calc_wall_win_load(
         build["wall"], build["win"], build["Kw_new"], build["Kwin_new"], build["dT"]
     )
     total_kW_3, total_W_3 = total_heat_load(env_total_3, infil_load)
     year_heat_3 = calc_year_heat(total_W_3, build["HDD"], build["Tin"])
-    elec_3 = elec_consume(year_heat_3, equip["SCOP3"])
-    invest_3 = equip["cost_pump"] + equip["cost_wall"] + equip["cost_lowend"]
+    elec_3 = elec_consume(year_heat_3, spf3) ###====使用季节SPF====
+    invest_3 = real_cost_pump + real_cost_wall + real_cost_lowend
     year_cost_3 = elec_3 * equip["elec_price"]
     save_elec_3 = elec_1 - elec_3
-    payback_3 = payback_period((equip["cost_wall"] + equip["cost_lowend"]), save_elec_3, equip["elec_price"])
+    payback_3 = payback_period((real_cost_wall + real_cost_lowend), save_elec_3, equip["elec_price"])
     load_save_rate_3 = round((total_kW_1 - total_kW_3)/total_kW_1*100,2)
     elec_save_rate_3 = round((elec_1 - elec_3)/elec_1*100,2)
     need_aux3, aux_load3 = check_aux_electric_heat(total_kW_3, equip["Qhp_rated3"])
     co2_3 = calc_carbon(elec_3, equip["grid_ef"])
     co2_reduce_3 = round(co2_1 - co2_3,2)
     co2_reduce_rate_3 = round((co2_1 - co2_3)/co2_1*100,2) if co2_1>0 else 0
-
     budget = equip["budget"]
     within_1 = invest_1 <= budget
-    within_2 = invest_2 <= budget
-    within_3 = invest_3 <= budget
+    #创新1约束：不允许外墙改造，直接置False
+    within_2 = invest_2 <= budget and allow_wall_retrofit
+    within_3 = invest_3 <= budget and allow_wall_retrofit
     tag_1 = "✅ 预算内" if within_1 else "❌ 超预算"
-    tag_2 = "✅ 预算内" if within_2 else "❌ 超预算"
-    tag_3 = "✅ 预算内" if within_3 else "❌ 超预算"
-
+    tag_2 = "✅ 预算内" if within_2 else ("❌ 超预算/工程禁止" if not allow_wall_retrofit else "❌ 超预算")
+    tag_3 = "✅ 预算内" if within_3 else ("❌ 超预算/工程禁止" if not allow_wall_retrofit else "❌ 超预算")
     candidates = []
     if within_2 and payback_2 is not None:
         candidates.append(("方案2", payback_2, elec_save_rate_2))
     if within_3 and payback_3 is not None:
         candidates.append(("方案3", payback_3, elec_save_rate_3))
     best_scheme = min(candidates, key=lambda x: x[1])[0] if candidates else None
-
     budget_sufficient = budget >= invest_3 * 1.2
     if within_2 and within_3:
         eco_scheme = "方案3" if elec_save_rate_3 >= elec_save_rate_2 else "方案2"
@@ -521,51 +584,57 @@ elif page_select == "3.三套方案计算结果":
         eco_scheme = "方案3"
     else:
         eco_scheme = None
-
     col_a, col_b, col_c = st.columns([1,1,1])
     CARD_FIX_HEIGHT = 660
-
     with col_a:
         with st.container(height=CARD_FIX_HEIGHT):
             st.markdown("### 🟦 方案1｜仅更换热泵")
             st.metric("热负荷(kW)", round(total_kW_1,2))
+            st.metric("铭牌SCOP", equip["SCOP_nameplate1"])
+            st.metric("季节SPF", spf1)
             st.metric("供水温度℃", equip["supply_temp1"])
             st.metric("年耗电(kWh)", round(elec_1,1))
             st.metric("年CO₂排放(kg)", co2_1)
             st.metric("是否需辅助电加热","✅需要" if need_aux1 else "❌不需要")
             st.divider()
-            st.metric("总初投资(元)", invest_1)
+            st.metric("总初投资(元)", round(invest_1,0))
             st.metric("年采暖电费(元)", round(year_cost_1,2))
-
     with col_b:
         with st.container(height=CARD_FIX_HEIGHT):
             st.markdown("### 🟩 方案2｜围护改造+常规热泵")
+            if not allow_wall_retrofit:
+                st.info("🚫工程约束，本方案不可实施")
             st.metric("热负荷(kW)", round(total_kW_2,2), delta=f"-{load_save_rate_2}%")
+            st.metric("铭牌SCOP", equip["SCOP_nameplate2"])
+            st.metric("季节SPF", spf2)
             st.metric("供水温度℃", equip["supply_temp2"])
             st.metric("年耗电(kWh)", round(elec_2,1), delta=f"-{elec_save_rate_2}%")
             st.metric("年CO₂排放(kg)", co2_2, delta=f"-{co2_reduce_rate_2}%")
             st.metric("是否需辅助电加热","✅需要" if need_aux2 else "❌不需要")
             st.divider()
-            st.metric("总初投资(元)", invest_2)
+            st.metric("总初投资(元)", round(invest_2,0))
             st.metric("年采暖电费(元)", round(year_cost_2,2))
-
     with col_c:
         with st.container(height=CARD_FIX_HEIGHT):
             st.markdown("### 🟨 方案3｜围护+低温末端+低温热泵")
+            if not allow_wall_retrofit:
+                st.info("🚫工程约束，本方案不可实施")
             st.metric("热负荷(kW)", round(total_kW_3,2), delta=f"-{load_save_rate_3}%")
+            st.metric("铭牌SCOP", equip["SCOP_nameplate3"])
+            st.metric("季节SPF", spf3)
             st.metric("供水温度℃", equip["supply_temp3"])
             st.metric("年耗电(kWh)", round(elec_3,1), delta=f"-{elec_save_rate_3}%")
             st.metric("年CO₂排放(kg)", co2_3, delta=f"-{co2_reduce_rate_3}%")
             st.metric("是否需辅助电加热","✅需要" if need_aux3 else "❌不需要")
             st.divider()
-            st.metric("总初投资(元)", invest_3)
+            st.metric("总初投资(元)", round(invest_3,0))
             st.metric("年采暖电费(元)", round(year_cost_3,2))
-
     st.divider()
-
     result_df = pd.DataFrame({
         "改造方案": ["方案1：仅更换热泵", "方案2：围护改造+常规热泵", "方案3：围护+低温末端+低温热泵"],
         "设计热负荷(kW)": [round(total_kW_1, 2), round(total_kW_2, 2), round(total_kW_3, 2)],
+        "铭牌SCOP":[equip["SCOP_nameplate1"],equip["SCOP_nameplate2"],equip["SCOP_nameplate3"]],
+        "季节综合SPF":[spf1,spf2,spf3],
         "设计供水温度(℃)":[equip["supply_temp1"],equip["supply_temp2"],equip["supply_temp3"]],
         "热泵额定制热量(kW)":[equip["Qhp_rated1"],equip["Qhp_rated2"],equip["Qhp_rated3"]],
         "是否需要辅助电加热":["是" if need_aux1 else "否","是" if need_aux2 else "否","是" if need_aux3 else "否"],
@@ -577,23 +646,19 @@ elif page_select == "3.三套方案计算结果":
         "年运行CO₂排放(kgCO₂)":[co2_1,co2_2,co2_3],
         "年减碳量(kgCO₂)":["基准",co2_reduce_2,co2_reduce_3],
         "碳排放削减率(%)":["基准",co2_reduce_rate_2,co2_reduce_rate_3],
-        "项目总初投资(元)": [invest_1, invest_2, invest_3],
+        "项目总初投资(元)": [round(invest_1,0), round(invest_2,0), round(invest_3,0)],
         "预算比对": [tag_1, tag_2, tag_3],
         "年采暖电费(元)": [round(year_cost_1, 2), round(year_cost_2, 2), round(year_cost_3, 2)],
         "静态投资回收期(年)": ["基准", payback_2, payback_3]
     })
-
     st.dataframe(result_df, use_container_width=True)
     csv_bytes = result_df.to_csv(index=False, encoding="utf‑8‑sig").encode("utf‑8‑sig")
     st.download_button(label="📥 下载计算结果CSV", data=csv_bytes,
                        file_name="热泵改造结果_供水温度_辅助电加热_碳排放.csv", mime="text/csv")
-
     st.divider()
-
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊热负荷对比","🔥年需热量对比","⚡年耗电量对比","💡耗电量节能率对比","💰静态回收期对比","🌿年碳排放对比"
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "📊热负荷对比","🔥年需热量对比","⚡年耗电量对比","💡耗电量节能率对比","💰静态回收期对比","🌿年碳排放对比","📈敏感性分析","🕸多维度雷达评分"
     ])
-
     color_list = ["#6366f1","#f59e0b","#10b981"]
     layout_common = dict(
         template="plotly_white",
@@ -603,7 +668,6 @@ elif page_select == "3.三套方案计算结果":
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(99,102,241,0.04)"
     )
-
     with tab1:
         fig1 = px.bar(result_df, x="改造方案", y="设计热负荷(kW)", title="三套方案采暖设计热负荷对比",
                       color="改造方案", color_discrete_sequence=color_list)
@@ -638,42 +702,53 @@ elif page_select == "3.三套方案计算结果":
                       color="改造方案", color_discrete_sequence=color_list)
         fig6.update_layout(**layout_common)
         st.plotly_chart(fig6, use_container_width=True)
-
+    ###====创新2：敏感性分析tab====
+    with tab7:
+        st.info("敏感性分析：保温造价±20%、居民电价±0.1元，观察静态投资回收期变化，评估方案抗风险能力")
+        sen_df = calc_sensitivity(real_cost_wall,equip["elec_price"],save_elec_2,save_elec_3,real_cost_lowend)
+        st.dataframe(sen_df,use_container_width=True)
+        fig_sen = px.bar(sen_df,x="场景",y=["方案2回收期","方案3回收期"],title="造价、电价波动对回收期的影响",barmode="group")
+        fig_sen.update_layout(**layout_common)
+        st.plotly_chart(fig_sen,use_container_width=True)
+    ###====创新3：雷达图tab====
+    with tab8:
+        st.info("🕸多维度综合评分（0‑10分，分数越高越优；维度：初投资、回收期、节能率、减碳、施工难度）")
+        s1,s2,s3 = get_radar_score(payback_2,payback_3,elec_save_rate_2,elec_save_rate_3,co2_reduce_rate_2,co2_reduce_rate_3,invest_2,invest_3)
+        categories = ["初投资","回收期","节能率","减碳","施工难度"]
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(r=list(s1.values()),theta=categories,name="方案1 仅换热泵",fill="toself"))
+        fig_radar.add_trace(go.Scatterpolar(r=list(s2.values()),theta=categories,name="方案2 围护+热泵",fill="toself"))
+        fig_radar.add_trace(go.Scatterpolar(r=list(s3.values()),theta=categories,name="方案3 围护+末端+低温热泵",fill="toself"))
+        fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0,10])),title="三套方案多维度雷达综合评分",**layout_common)
+        st.plotly_chart(fig_radar,use_container_width=True)
     st.divider()
-
     text_p2 = payback_2 if payback_2 is not None else "——"
     text_p3 = payback_3 if payback_3 is not None else "——"
-
     st.subheader("✅ 最终方案推荐与理由（预算+辅助电加热+供水温度+碳排放多维度）")
-    st.info(f"💰 业主改造费用预算：**{budget:,} 元**")
-
-    budget_note_1 = f"初投资 {invest_1:,} 元，{tag_1}"
-    budget_note_2 = f"初投资 {invest_2:,} 元，{tag_2}"
-    budget_note_3 = f"初投资 {invest_3:,} 元，{tag_3}"
-
+    st.info(f"💰 业主改造费用预算：**{budget:,} 元**｜当前改造模式：{st.session_state['retrofit_mode']}")
+    budget_note_1 = f"初投资 {round(invest_1):,} 元，{tag_1}"
+    budget_note_2 = f"初投资 {round(invest_2):,} 元，{tag_2}"
+    budget_note_3 = f"初投资 {round(invest_3):,} 元，{tag_3}"
     if not within_2 and not within_3:
         rec1_label = "⚠️ 预算内唯一可行"
         rec1_reason = "方案2、3初投资均超出预算，方案1为预算内唯一可实施方案；但仅更换热泵不改造围护，无节能减碳效益。"
     else:
         rec1_label = "❌ 不推荐"
         rec1_reason = "仅更换热泵而不改造围护结构，热负荷无削减、无节能减碳效益，仅作为基准对照。"
-
     if within_2:
         rec2_label = "✅ 优先推荐" if best_scheme == "方案2" else "✅ 可推荐"
         rec2_reason = (f"预算内可行，静态投资回收期{text_p2}年，耗电量节能{elec_save_rate_2}%，碳排放削减{co2_reduce_rate_2}%；"
                        f"供水温度{equip['supply_temp2']}℃，改造难度低，综合性价比优。")
     else:
         rec2_label = "❌ 不推荐"
-        rec2_reason = f"初投资{invest_2:,}元超出业主预算{budget:,}元，不具备实施条件。"
-
+        rec2_reason = f"初投资{round(invest_2):,}元超出业主预算{budget:,}元，不具备实施条件。"
     if within_3:
         rec3_label = "✅ 优先推荐" if best_scheme == "方案3" else "✅ 可推荐"
         rec3_reason = (f"预算内可行，静态投资回收期{text_p3}年，耗电量节能{elec_save_rate_3}%，碳排放削减{co2_reduce_rate_3}%；"
                        f"低温地暖供水温度{equip['supply_temp3']}℃，系统效率更高，长期运行更低碳。")
     else:
         rec3_label = "❌ 不推荐"
-        rec3_reason = f"初投资{invest_3:,}元超出业主预算{budget:,}元，不具备实施条件。"
-
+        rec3_reason = f"初投资{round(invest_3):,}元超出业主预算{budget:,}元，不具备实施条件。"
     if best_scheme:
         if budget_sufficient and within_2 and within_3:
             overall = f">预算 {budget:,} 元充足（≥方案3费用1.2倍），方案2、3均可行，以下提供**经济导向**与**节能减碳导向**两种推荐思路供权衡。"
@@ -681,7 +756,6 @@ elif page_select == "3.三套方案计算结果":
             overall = f">综上，在预算 {budget:,} 元约束下，**{best_scheme}** 为最优方案。"
     else:
         overall = f">综上，预算 {budget:,} 元下方案2、3均不可行，建议提高预算或仅实施方案1。"
-
     dual_rec = ""
     if budget_sufficient and within_2 and within_3:
         eco_pay = text_p2 if eco_scheme == "方案2" else text_p3
@@ -693,9 +767,8 @@ elif page_select == "3.三套方案计算结果":
         dual_rec = f"""
 **💡 预算充足·双维度推荐思路：**
 - 💰 **经济导向推荐：{best_scheme}** ——静态投资回收期最短（{econ_pay}年），初投资更低、施工风险更小。
-- 🌿 **节能减碳导向推荐：{eco_scheme}** ——耗电量节能率最高（{eco_save}%），碳排放削减{eco_carbon}%，年采暖电费最低（{eco_cost}元）；初投资{eco_invest:,}元、回收期{eco_pay}年。
+- 🌿 **节能减碳导向推荐：{eco_scheme}** ——耗电量节能率最高（{eco_save}%），碳排放削减{eco_carbon}%，年采暖电费最低（{eco_cost}元）；初投资{round(eco_invest):,}元、回收期{eco_pay}年。
 """
-
     def _gen_sequence(scheme):
         if scheme == "方案3":
             return """
@@ -717,38 +790,35 @@ elif page_select == "3.三套方案计算结果":
 - 建议同步检查原有末端及管路密封性。
 """
         return ""
-
     if budget_sufficient and eco_scheme and best_scheme and eco_scheme != best_scheme:
         sequence_text = _gen_sequence(best_scheme)+_gen_sequence(eco_scheme)
     elif best_scheme:
         sequence_text = _gen_sequence(best_scheme)
     else:
         sequence_text = ""
-
     st.markdown(f"""
 1. **方案1：仅更换热泵** —— {budget_note_1}
-    - 分析：围护不改造，设计热负荷{round(total_kW_1,2)}kW；供水温度{equip['supply_temp1']}℃；热泵额定制热量{equip['Qhp_rated1']}kW；{"需要辅助电加热，辅助负荷"+str(aux_load1)+"kW" if need_aux1 else "机组能力满足，不需要辅助电加热"}；年运行CO₂排放 {co2_1} kgCO₂。
+    - 分析：围护不改造，设计热负荷{round(total_kW_1,2)}kW；铭牌SCOP:{equip['SCOP_nameplate1']}，季节SPF:{spf1}；供水温度{equip['supply_temp1']}℃；热泵额定制热量{equip['Qhp_rated1']}kW；{"需要辅助电加热，辅助负荷"+str(aux_load1)+"kW" if need_aux1 else "机组能力满足，不需要辅助电加热"}；年运行CO₂排放 {co2_1} kgCO₂。
     - 结论：**{rec1_label}** —— {rec1_reason}
 2. **方案2：围护保温改造+常规空气源热泵** —— {budget_note_2}
-    - 分析：热负荷削减{load_save_rate_2}%，耗电量节能{elec_save_rate_2}%；供水温度{equip['supply_temp2']}℃；设计热负荷{round(total_kW_2,2)}kW，热泵额定制热量{equip['Qhp_rated2']}kW；{"需要辅助电加热，辅助负荷"+str(aux_load2)+"kW" if need_aux2 else "机组能力满足，不需要辅助电加热"}；年减碳 {co2_reduce_2} kgCO₂，碳排放削减 {co2_reduce_rate_2}%；静态投资回收期{text_p2}年。
+    - 分析：热负荷削减{load_save_rate_2}%，耗电量节能{elec_save_rate_2}%；铭牌SCOP:{equip['SCOP_nameplate2']}，季节SPF:{spf2}；供水温度{equip['supply_temp2']}℃；设计热负荷{round(total_kW_2,2)}kW，热泵额定制热量{equip['Qhp_rated2']}kW；{"需要辅助电加热，辅助负荷"+str(aux_load2)+"kW" if need_aux2 else "机组能力满足，不需要辅助电加热"}；年减碳 {co2_reduce_2} kgCO₂，碳排放削减 {co2_reduce_rate_2}%；静态投资回收期{text_p2}年。
     - 结论：**{rec2_label}** —— {rec2_reason}
 3. **方案3：围护改造+低温采暖末端+低温热泵** —— {budget_note_3}
-    - 分析：热负荷削减{load_save_rate_3}%，耗电量节能{elec_save_rate_3}%；低温地暖供水温度{equip['supply_temp3']}℃；设计热负荷{round(total_kW_3,2)}kW，热泵额定制热量{equip['Qhp_rated3']}kW；{"需要辅助电加热，辅助负荷"+str(aux_load3)+"kW" if need_aux3 else "机组能力满足，不需要辅助电加热"}；年减碳 {co2_reduce_3} kgCO₂，碳排放削减 {co2_reduce_rate_3}%；静态投资回收期{text_p3}年。
+    - 分析：热负荷削减{load_save_rate_3}%，耗电量节能{elec_save_rate_3}%；铭牌SCOP:{equip['SCOP_nameplate3']}，季节SPF:{spf3}；低温地暖供水温度{equip['supply_temp3']}℃；设计热负荷{round(total_kW_3,2)}kW，热泵额定制热量{equip['Qhp_rated3']}kW；{"需要辅助电加热，辅助负荷"+str(aux_load3)+"kW" if need_aux3 else "机组能力满足，不需要辅助电加热"}；年减碳 {co2_reduce_3} kgCO₂，碳排放削减 {co2_reduce_rate_3}%；静态投资回收期{text_p3}年。
     - 结论：**{rec3_label}** —— {rec3_reason}
 {overall}
 {dual_rec}
 {sequence_text}
 """)
 
-# ====================== 页面4：手工校核验算页【公式分开，不再堆在一起】 ======================
+# ====================== 页面4：手工校核验算页【增加换行拉开间距，小字不再拥挤】 ======================
 elif page_select == "4.手工校核验算页":
     st.markdown("""
 <div class="light-tech-title">
     <h1>✍️ 手工校核验算页面</h1>
-    <p>热负荷｜耗电量｜辅助电加热｜供水温度｜碳排放｜手算校验存档</p>
+    <p>热负荷｜季节SPF｜耗电量｜辅助电加热｜供水温度｜碳排放｜手算校验存档</p>
 </div>
 """, unsafe_allow_html=True)
-
     st.info("可手动代入参数手算，与程序计算结果进行对照校验，便于报告编写存档。")
     if "build" not in st.session_state or "equip" not in st.session_state:
         st.warning("⚠️ 请先在页面1录入建筑围护参数、页面2录入热泵末端参数后，再进行手算校核。")
@@ -764,21 +834,37 @@ elif page_select == "4.手工校核验算页":
 室内外计算温差 ΔT = {build["dT"]} K
 
 1）围护结构传热负荷
+
 $Q_{{wall}} = A_{{wall}} \\cdot K_{{wall}} \\cdot \\Delta T = {build["wall"]} \\times {build["Kw_old"]} \\times {build["dT"]}$
+
 $Q_{{win}} = A_{{win}} \\cdot K_{{win}} \\cdot \\Delta T = {build["win"]} \\times {build["Kwin_old"]} \\times {build["dT"]}$
 
 2）冷风渗透热负荷（换气次数法）
+
 $Q_{{inf}} = c_p \\cdot \\rho \\cdot V \\cdot n / 3600 \\cdot \\Delta T$
+
 $V = {round(build["volume"],2)}\ m^3,\ n={build["n"]}\ 次/h$
 
 3）总热负荷 = 围护负荷 + 冷风渗透负荷，转换为kW，与软件输出对比校验。
 """)
-
+    st.markdown("<br><br>", unsafe_allow_html=True)
     st.divider()
 
-    st.subheader("2. 辅助电加热校核公式")
+    st.subheader("2. 季节SPF计算公式")
+    st.markdown(r"""
+$SPF_{season}=SCOP_{铭牌} \times f_{decay}$
+
+- $SCOP_{铭牌}$：厂家样本标称制热性能系数
+
+- $f_{decay}$：冬季低温衰减系数，小于1，用来修正低温工况下热泵效率衰减，避免直接使用铭牌值高估制热能力
+""")
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.divider()
+
+    st.subheader("3. 辅助电加热校核公式")
     st.markdown(r"""
 $Q_{load}$：建筑设计热负荷(kW)
+
 $Q_{hp,rated}$：热泵室外设计温度额定制热量(kW)
 
 $$
@@ -788,58 +874,65 @@ Q_{hp,rated} < Q_{load}: \quad \text{需要辅助电加热},\ Q_{aux}=Q_{load}-Q
 \end{cases}
 $$
 """)
-
+    st.markdown("<br><br>", unsafe_allow_html=True)
     st.divider()
 
-    st.subheader("3. 供水温度说明")
+    st.subheader("4. 供水温度说明")
     st.markdown("""
 - 方案1、方案2：原有散热器末端，供水温度一般50‑55℃；
-- 方案3：低温地暖末端，供水温度一般35‑42℃。
-> 供水温度越低，空气源热泵机组实际运行COP越高，耗电越少，碳排放越低。
-""")
 
+- 方案3：低温地暖末端，供水温度一般35‑42℃。
+
+> 供水温度越低，空气源热泵机组实际运行SPF越高，耗电越少，碳排放越低。
+""")
+    st.markdown("<br><br>", unsafe_allow_html=True)
     st.divider()
 
-    st.subheader("4. 热泵年耗电量计算公式")
+    st.subheader("5. 热泵年耗电量计算公式（使用季节SPF）")
     st.markdown(r"""
 $Q_{year}$：建筑全年采暖需热量(kWh)
-$SCOP$：热泵制热性能系数
 
-$$E_{year}=\frac{Q_{year}}{SCOP}$$
+$SPF_{season}$：季节综合制热性能系数
+
+$$E_{year}=\frac{Q_{year}}{SPF_{season}}$$
 """)
-
+    st.markdown("<br><br>", unsafe_allow_html=True)
     st.divider()
 
-    st.subheader("5. 改造耗电量节能率计算公式")
+    st.subheader("6. 改造耗电量节能率计算公式")
     st.markdown(r"""
 $E_{基准}$：基准方案年耗电量(kWh)
+
 $E_{改造}$：改造后方案年耗电量(kWh)
 
 $$节能率=\frac{E_{基准}-E_{改造}}{E_{基准}} \times 100\%$$
 """)
-
+    st.markdown("<br><br>", unsafe_allow_html=True)
     st.divider()
 
-    st.subheader("6. 运行阶段碳排放计算公式")
+    st.subheader("7. 运行阶段碳排放计算公式")
     st.markdown(r"""
 $EF_{grid}$：电网碳排放因子，单位 kgCO₂/kWh
 
 $$CO_{2}=E_{year} \times EF_{grid}$$
 """)
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.divider()
 
     st.info("将手算草稿结果填入下方参数，和软件结果比对，用于报告存档。")
-
     hand_calc_heat = st.number_input("手算全年采暖需热量 kWh", value=0.0)
-    hand_SCOP = st.number_input("校核SCOP取值", value=2.6)
+    hand_nameplate_scop = st.number_input("手算铭牌SCOP取值", value=2.6)
+    hand_decay = st.number_input("手算低温衰减系数", value=0.82)
     hand_qload = st.number_input("手算建筑总热负荷 kW", value=0.0)
-    hand_qhp = st.number_input("校核热泵额定制热量 kW", value=12.0)
+    hand_qhp = st.number_input("手算热泵额定制热量 kW", value=12.0)
     hand_supply_temp = st.number_input("手算设计供水温度 ℃", value=55.0)
-    hand_ef = st.number_input("校核电网排放因子 kgCO₂/kWh", value=0.5810)
-
+    hand_ef = st.number_input("手算电网排放因子 kgCO₂/kWh", value=0.5810)
     if st.button("执行校核计算"):
-        hand_elec = hand_calc_heat / hand_SCOP if hand_SCOP>0 else 0
+        hand_spf = calc_season_spf(hand_nameplate_scop, hand_decay)
+        hand_elec = hand_calc_heat / hand_spf if hand_spf>0 else 0
         hand_need_aux, hand_aux_load = check_aux_electric_heat(hand_qload, hand_qhp)
         hand_co2 = calc_carbon(hand_elec, hand_ef)
+        st.metric("🔍手算季节SPF", hand_spf)
         st.metric("🔍手算得到年耗电量(kWh)", round(hand_elec,2))
         st.metric("🔍手算判断是否需要辅助电加热", "✅需要" if hand_need_aux else "❌不需要")
         st.metric("🔍手算辅助电加热负荷(kW)", hand_aux_load)
