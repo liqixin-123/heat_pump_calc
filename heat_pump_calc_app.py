@@ -40,12 +40,10 @@ RETROFIT_MODE_CFG = {
 }
 
 # ===================== 新增V1.7：空气源热泵厂家工况样本数据表 =====================
-"""
-热泵样本表：
-测试工况：国标GB/T 25127.1，出水温度tg_supply，室外干球T_amb
-每一条：[室外环境温度℃，供水温度℃，COP，工况可用制热量kW]
-方案1、2使用常规热泵样本；方案3使用低温热泵样本
-"""
+# 热泵样本表：
+# 测试工况：国标GB/T 25127.1，出水温度tg_supply，室外干球T_amb
+# 每一条：[室外环境温度℃，供水温度℃，COP，工况可用制热量kW]
+# 方案1、2使用常规热泵样本；方案3使用低温热泵样本
 # 方案1、方案2：常规型热泵厂家样本（样本固定出水55℃）
 SAMPLE_HP_NORMAL = [
     [7, 55, 3.80, 12.0],
@@ -64,14 +62,12 @@ SAMPLE_HP_LOWTEMP = [
 ]
 
 # ================= V1.8新增：18种自由组合枚举定义【3围护×3末端×2热泵】 =================
-"""
-批量改造分项折算系数调研参考依据（项目需按当地招标报价修正）：
-1. 分户独立改造：围护=1.00，热泵=1.00，末端=1.00；
-2. 整栋集中批量改造参考经验：
-   - 围护保温工程 0.75：老旧小区EPC批量集采、外脚手架共用、人工摊薄；
-   - 空气源热泵设备安装 0.85：厂家批量供货、统一班组安装，省去零散上门差旅成本；
-   - 室内末端改造 0.80：批量进场、开槽回填工序统一调度。
-"""
+# 批量改造分项折算系数调研参考依据（项目需按当地招标报价修正）：
+# 1. 分户独立改造：围护=1.00，热泵=1.00，末端=1.00；
+# 2. 整栋集中批量改造参考经验：
+#    - 围护保温工程 0.75：老旧小区EPC批量集采、外脚手架共用、人工摊薄；
+#    - 空气源热泵设备安装 0.85：厂家批量供货、统一班组安装，省去零散上门差旅成本；
+#    - 室内末端改造 0.80：批量进场、开槽回填工序统一调度。
 ENVELOPE_OPTIONS = [
     {"id":"E0","name":"E0-不做围护改造","is_retrofit":False},
     {"id":"E1","name":"E1-部分围护改造","is_retrofit":True},
@@ -676,7 +672,7 @@ def payback_period_incremental(base_invest, add_invest, base_year_elec, new_year
 
 # ======================全局页面基础配置 + 浅色科技CSS ======================
 st.set_page_config(
-    page_title="郑州老旧住宅热泵改造协同优化平台 V1.10",
+    page_title="郑州老旧住宅热泵改造协同优化平台 V1.19",
     page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -704,7 +700,7 @@ footer {visibility: hidden;}
 .light-tech-title h1 {
     font-size: 28px;
     font-weight: 800;
-    background: linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899);
+    background: linear-gradient(90deg, #4f7df2, #7b9cf6, #b98cf6);
     -webkit-background-clip: text;
     color: transparent;
     margin: 0 0 8px 0;
@@ -733,11 +729,11 @@ button[kind="primary"]{background:linear-gradient(90deg,#6366f1,#8b5cf6) !import
 header[data-testid="stHeader"]{visibility:hidden;height:0;}
 .block-container{padding-top:1.2rem;}
 .hero-banner{
-    background:linear-gradient(135deg,#312e81,#6d28d9 55%,#be185d);
+    background:linear-gradient(135deg,#1e3a8a,#2563eb 55%,#3b82f6);
     border-radius:16px;padding:20px 28px;margin-bottom:16px;color:#ffffff;
-    box-shadow:0 12px 32px rgba(99,102,241,0.30);
+    box-shadow:0 12px 32px rgba(37,99,235,0.30);
 }
-.hero-banner .hero-main{font-size:26px;font-weight:800;letter-spacing:1px;}
+.hero-banner .hero-main{font-size:26px;font-weight:800;letter-spacing:1px;background:linear-gradient(90deg,#ffffff,#dbeafe,#bfdbfe);-webkit-background-clip:text;color:transparent;}
 .hero-banner .hero-sub{font-size:14px;color:#e0e7ff;margin-top:6px;}
 .hero-banner .hero-meta{font-size:12.5px;color:#c7d2fe;margin-top:10px;border-top:1px solid rgba(255,255,255,0.25);padding-top:8px;}
 .hero-banner .hero-route{font-size:12.5px;color:#fbcfe8;margin-top:6px;}
@@ -748,7 +744,7 @@ st.markdown("""
 <div class="hero-banner">
     <div class="hero-main">郑州老旧住宅热泵改造协同优化平台</div>
     <div class="hero-sub">围护改造 · 末端适配 · 空气源热泵选型 · 经济与碳排放测算｜郑州老旧住宅典型案例</div>
-    <div class="hero-meta">作品：老旧住宅空气源热泵协同改造测算系统｜团队：**【团队名称】**｜版本：V1.10｜更新时间：2026-08-28</div>
+    <div class="hero-meta">作品：老旧住宅空气源热泵协同改造测算系统｜团队：顺势而为队｜版本：V1.19｜更新时间：2026-08-28</div>
     <div class="hero-route">技术路线：建筑围护 H → 设计负荷 → 末端反算供水温度 → 热泵设计工况容量/COP → HDD 分段能耗 → 经济/碳排 → 四道闸门 → 方案推荐</div>
 </div>
 """, unsafe_allow_html=True)
@@ -823,6 +819,16 @@ with st.sidebar:
 <div style="font-size:12px;color:#666;">V1.7｜热泵样本插值+HDD分段能耗｜末端热工迭代求供水温度｜围护：单位造价×工程量</div>
 </div>
 """, unsafe_allow_html=True)
+    with st.expander("📖 参数说明与折算依据（点击展开）", expanded=False):
+        st.markdown("**热泵样本表**｜测试工况为国标 GB/T 25127.1，出水温度 tg_supply，室外干球 T_amb；每一条：［室外环境温度℃，供水温度℃，COP，工况可用制热量kW］；方案1、2 使用常规热泵样本；方案3 使用低温热泵样本。")
+        st.markdown("""
+**批量改造分项折算系数调研参考依据（项目需按当地招标报价修正）：**
+- 分户独立改造：围护=1.00，热泵=1.00，末端=1.00；
+- 整栋集中批量改造参考经验：
+  - 围护保温工程 **0.75**：老旧小区EPC批量集采、外脚手架共用、人工摊薄；
+  - 空气源热泵设备安装 **0.85**：厂家批量供货、统一班组安装，省去零散上门差旅成本；
+  - 室内末端改造 **0.80**：批量进场、开槽回填工序统一调度。
+""")
     sel_house = st.selectbox("🏠选择户型",["中间层住宅","顶层边户"])
     if sel_house != st.session_state["house_type"]:
         switch_house_type(sel_house)
@@ -842,7 +848,7 @@ with st.sidebar:
         st.session_state["calc_mode"] = "typical"
 
     # ===== V1.9新增：模型版本号 + 恢复统一基准 =====
-    st.markdown("**🛠 模型版本号：V1.10**（按《小程序修改建议》修订）")
+    st.markdown("**🛠 模型版本号：V1.19**（按《小程序修改建议》修订）")
     st.caption("更新时间：2026-08-28\n计算链：H → Q_design → Q_year → SPF/COP → E_HP → E_aux → 费用 → 碳排放")
     if st.button("♻️恢复统一基准（重置全部默认参数）", use_container_width=True):
         reset_to_defaults()
@@ -893,10 +899,6 @@ if page_select == "1.建筑围护参数录入":
     <h1>🏠建筑围护结构参数｜对象：{ht}</h1>
 </div>
 """, unsafe_allow_html=True)
-    if ht == "中间层住宅":
-        st.warning("⚠️边界条件：上下楼层均为采暖住户；不计屋面、地面楼板热损失；构件：外墙、外窗、外门、非采暖楼梯间隔墙；无附加耗热量。本模型不适用顶层、底层、边户。")
-    else:
-        st.warning("⚠️边界条件：顶层东西山墙边户；计入屋面、东西山墙热损失；不计底层地面楼板；构件：普通外墙、东西山墙、屋面、外窗、外门、非采暖楼梯间隔墙；无附加耗热量。本模型不适用底层住户。")
     build = st.session_state["build"]
     warn_messages = input_warning_check(build, st.session_state["equip"])
     for w in warn_messages:
@@ -975,14 +977,6 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
     col_left, col_mid, col_right = st.columns([1,1,1])
     # ===== V1.8新增：分项独立批量折算系数（可编辑，含调研依据） =====
     st.subheader("🔧批量改造分项折算系数（可编辑）")
-    st.info("""
-**调研参考依据（行业经验值，项目需结合当地招标报价修正）：**
-1. 分户独立改造：围护=1.00，热泵=1.00，末端=1.00；
-2. 整栋集中批量改造参考：
-   - 围护保温工程 **0.75**：老旧小区EPC批量集采、外脚手架共用、人工摊薄；
-   - 空气源热泵设备安装 **0.85**：厂家批量供货、统一班组安装，省去零散上门差旅成本；
-   - 室内末端改造 **0.80**：批量进场、开槽回填工序统一调度。
-""")
     cc1, cc2, cc3 = st.columns(3)
     with cc1:
         st.number_input("围护工程折算系数", min_value=0.4, max_value=1.0, step=0.01,
@@ -1052,7 +1046,6 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
     # ========= V1.7新增：热泵厂家样本表展示 =========
     st.divider()
     st.subheader("📋热泵厂家样本数据表（用于插值计算COP、可用制热量）")
-    st.info("第一版：样本固定出水温度；根据室外温度线性插值；超出样本范围输出报警")
     col_s1, col_s2 = st.columns(2)
     with col_s1:
         st.markdown("**方案1/2 常规热泵样本｜样本出水：55℃**")
@@ -1075,10 +1068,6 @@ elif page_select == "3.三套方案计算结果":
     <h1>📊三套改造方案｜户型：{ht}｜V1.7【热泵样本插值+HDD分段能耗】</h1>
 </div>
 """, unsafe_allow_html=True)
-    if ht == "中间层住宅":
-        st.warning("⚠️边界：中间层，上下均采暖住户；不计屋面、地面楼板；构件：外墙、外窗、外门、非采暖隔墙；无附加耗热量；本结果不能用于顶层、底层、边户！")
-    else:
-        st.warning("⚠️边界：顶层东西山墙边户；计入屋面、东西山墙；不计底层地面楼板；无附加耗热量；本结果不能用于中间层、底层住户！")
     if "build" not in st.session_state or "equip" not in st.session_state:
         st.warning("⚠️请先录入页面1、页面2参数")
         st.stop()
@@ -1686,10 +1675,6 @@ elif page_select == "4.手工校核验算页":
     <h1>✍️手工校核验算页面｜户型：{ht}</h1>
 </div>
 """, unsafe_allow_html=True)
-    if ht == "中间层住宅":
-        st.info("边界：中间层，不计屋面、地面楼板；构件：外墙、外窗、外门、非采暖隔墙+冷风渗透；无附加耗热量")
-    else:
-        st.info("边界：顶层边户；计入屋面、东西山墙；不计底层地面楼板；构件：外墙、东西山墙、屋面、外窗、外门、非采暖隔墙+冷风渗透；无附加耗热量")
     st.info("软件自动带出计算结果，输入手算值对比误差。误差阈值：≤1%判定校验通过。")
     if "calc_mid" not in st.session_state:
         st.warning("⚠️请先访问页面3完成计算生成中间变量")
