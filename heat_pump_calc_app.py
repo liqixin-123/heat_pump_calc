@@ -672,7 +672,7 @@ def payback_period_incremental(base_invest, add_invest, base_year_elec, new_year
 
 # ======================全局页面基础配置 + 浅色科技CSS ======================
 st.set_page_config(
-    page_title="郑州老旧住宅热泵改造协同优化平台 V1.19",
+    page_title="郑州老旧住宅热泵改造协同优化平台 V1.20",
     page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -690,17 +690,17 @@ light_tech_style = """
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 .light-tech-title {
-    background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,250,255,0.95));
-    border: 1px solid rgba(99, 102, 241, 0.35);
+    background: linear-gradient(135deg, rgba(219,234,254,0.95), rgba(191,219,254,0.95));
+    border: 1px solid rgba(37,99,235,0.40);
     border-radius: 14px;
     padding: 22px 26px;
     margin-bottom: 24px;
-    box-shadow: 0 8px 24px rgba(99, 102, 241, 0.14);
+    box-shadow: 0 8px 24px rgba(37,99,235,0.14);
 }
 .light-tech-title h1 {
     font-size: 28px;
     font-weight: 800;
-    background: linear-gradient(90deg, #4f7df2, #7b9cf6, #b98cf6);
+    background: linear-gradient(90deg, #1e40af, #2563eb, #3b82f6);
     -webkit-background-clip: text;
     color: transparent;
     margin: 0 0 8px 0;
@@ -729,14 +729,15 @@ button[kind="primary"]{background:linear-gradient(90deg,#6366f1,#8b5cf6) !import
 header[data-testid="stHeader"]{visibility:hidden;height:0;}
 .block-container{padding-top:1.2rem;}
 .hero-banner{
-    background:linear-gradient(135deg,#1e3a8a,#2563eb 55%,#3b82f6);
-    border-radius:16px;padding:20px 28px;margin-bottom:16px;color:#ffffff;
-    box-shadow:0 12px 32px rgba(37,99,235,0.30);
+    background:linear-gradient(135deg,#dbeafe,#bfdbfe 55%,#93c5fd);
+    border:1px solid rgba(37,99,235,0.30);
+    border-radius:16px;padding:20px 28px;margin-bottom:16px;color:#1e3a8a;
+    box-shadow:0 8px 24px rgba(37,99,235,0.15);
 }
-.hero-banner .hero-main{font-size:26px;font-weight:800;letter-spacing:1px;background:linear-gradient(90deg,#ffffff,#dbeafe,#bfdbfe);-webkit-background-clip:text;color:transparent;}
-.hero-banner .hero-sub{font-size:14px;color:#e0e7ff;margin-top:6px;}
-.hero-banner .hero-meta{font-size:12.5px;color:#c7d2fe;margin-top:10px;border-top:1px solid rgba(255,255,255,0.25);padding-top:8px;}
-.hero-banner .hero-route{font-size:12.5px;color:#fbcfe8;margin-top:6px;}
+.hero-banner .hero-main{font-size:26px;font-weight:800;letter-spacing:1px;background:linear-gradient(90deg,#1e3a8a,#2563eb,#3b82f6);-webkit-background-clip:text;color:transparent;}
+.hero-banner .hero-sub{font-size:14px;color:#1e3a8a;margin-top:6px;}
+.hero-banner .hero-meta{font-size:12.5px;color:#3b5998;margin-top:10px;border-top:1px solid rgba(37,99,235,0.25);padding-top:8px;}
+.hero-banner .hero-route{font-size:12.5px;color:#2563eb;margin-top:6px;}
 </style>
 """
 st.markdown(light_tech_style, unsafe_allow_html=True)
@@ -744,7 +745,7 @@ st.markdown("""
 <div class="hero-banner">
     <div class="hero-main">郑州老旧住宅热泵改造协同优化平台</div>
     <div class="hero-sub">围护改造 · 末端适配 · 空气源热泵选型 · 经济与碳排放测算｜郑州老旧住宅典型案例</div>
-    <div class="hero-meta">作品：老旧住宅空气源热泵协同改造测算系统｜团队：顺势而为队｜版本：V1.19｜更新时间：2026-08-28</div>
+    <div class="hero-meta">作品：老旧住宅空气源热泵协同改造测算系统｜团队：顺势而为队｜版本：V1.20｜更新时间：2026-08-28</div>
     <div class="hero-route">技术路线：建筑围护 H → 设计负荷 → 末端反算供水温度 → 热泵设计工况容量/COP → HDD 分段能耗 → 经济/碳排 → 四道闸门 → 方案推荐</div>
 </div>
 """, unsafe_allow_html=True)
@@ -848,7 +849,7 @@ with st.sidebar:
         st.session_state["calc_mode"] = "typical"
 
     # ===== V1.9新增：模型版本号 + 恢复统一基准 =====
-    st.markdown("**🛠 模型版本号：V1.19**（按《小程序修改建议》修订）")
+    st.markdown("**🛠 模型版本号：V1.20**（按《小程序修改建议》修订）")
     st.caption("更新时间：2026-08-28\n计算链：H → Q_design → Q_year → SPF/COP → E_HP → E_aux → 费用 → 碳排放")
     if st.button("♻️恢复统一基准（重置全部默认参数）", use_container_width=True):
         reset_to_defaults()
