@@ -726,7 +726,10 @@ label.st-label{color:#334155 !important;font-weight:500;}
 .st-success>div{background:#f0fdf4 !important;border-left-color:#10b981 !important;color:#166534 !important;}
 hr{border-color:rgba(99,102,241,0.22) !important;}
 button[kind="primary"]{background:linear-gradient(90deg,#6366f1,#8b5cf6) !important;border:none !important;}
+/* 桌面端隐藏顶栏保持干净；移动端保留顶栏以便展开侧边栏 */
+@media (min-width: 768px) {
 header[data-testid="stHeader"]{visibility:hidden;height:0;}
+}
 .block-container{padding-top:1.2rem;}
 .hero-banner{
     background:linear-gradient(135deg,#dbeafe,#bfdbfe 55%,#93c5fd);
@@ -1298,12 +1301,12 @@ elif page_select == "3.三套方案计算结果":
         "tg1":tg1,"tg2":tg2,"tg3":tg3
     }
     st.info(f"🔍中间输出｜方案1总热损失H1={round(H1_kWK,4)} kW/K；单位面积热负荷 {q_load_per_area1} W/m²")
-    #输出热泵样本插值报警
-    for w in hp_warns_1:
+    #输出热泵样本插值报警（去重：HDD各分段产生的相同警告只显示一次）
+    for w in list(dict.fromkeys(hp_warns_1)):
         st.warning("[方案1] "+w)
-    for w in hp_warns_2:
+    for w in list(dict.fromkeys(hp_warns_2)):
         st.warning("[方案2] "+w)
-    for w in hp_warns_3:
+    for w in list(dict.fromkeys(hp_warns_3)):
         st.warning("[方案3] "+w)
 
     # 末端改进建议
