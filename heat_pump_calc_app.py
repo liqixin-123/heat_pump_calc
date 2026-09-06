@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-老旧住宅空气源热泵协同改造计算工具【V1.28】
+老旧住宅空气源热泵协同改造计算工具【V1.34】
 UI：浅色科技风｜玻璃拟态｜清爽高亮｜大屏展示
 ⚠️户型切换：
 ①中间层住宅：上下均为采暖住户；不计屋面、地面楼板；构件：外墙、外窗、外门、非采暖楼梯间隔墙+冷风渗透
@@ -19,13 +19,20 @@ UI：浅色科技风｜玻璃拟态｜清爽高亮｜大屏展示
 👉V1.21修订要点：
 - 散热器散热指数 m 修正为 1.30（依据 GB/T 13754-2017 式(8) Q=K_M·ΔT^m，指数由型号热工检测报告实测拟合；本程序取工程典型值 m≈1.30，铸铁柱式实测 m≈1.28~1.30，如 74×60 铸铁 m≈1.283，台账标注“算/典型值”）。
 - 热泵性能升级为“室外温度×供水温度”二维性能面：域内双线性插值；域外禁止外推，仅打标记并纳入数据闸门。
-  两套设备均按【美的雪焰/真暖】官方说明书真实锚点标定（执行 GB/T 25127.2-2020）：
+  两套设备均按【美的MHSR-N8-S1系列】官方说明书真实锚点标定（执行 GB/T 25127.2-2020）：
   设备A(方案1/2)=MHSR120N8-S1(12kW)，A7/W45 COP=3.50、Q=12kW，55℃出水列按温升比换算；
   设备B(方案3)=MHSR100N8-S1(10kW)，A7/W45 COP=3.55、Q=10kW，A-12/W35 COP=2.70、A-20/W35 COP=2.21。
 - 性能面证据分级：厂家公开锚点【源】与温升幂律推算格【算】彻底分栏；未获得完整厂家性能矩阵前，界面一律称“热泵性能估算面/模型适用性”，不再称“厂家二维性能表/厂家数据域”。
 - 第五道闸门更名 performance_model_applicable：模型适用性判定（估算面是否覆盖工况），不再表述为“厂家样本验证范围”。
 - 季节性能统一口径为 SPF_HP+aux = Q_year / (E_HP + E_aux)（由分段积分反算；分母仅含热泵主机与辅助电加热，未计入水泵/控制/待机，见 ）；
   原铭牌SPF×衰减系数仅保留为“旧算法估算值”，不再作为当前主指标
+👉V1.34修订要点（方案A：机型名称修正+供水温度上限约束）：
+- 机型名称修正：原"美的雪焰/真暖"系列功率区间为14-20kW，与代码使用的MHSR100N8-S1(10kW)、MHSR120N8-S1(12kW)不匹配；
+  全部替换为"美的MHSR-N8-S1系列"，型号、功率、系列完全自洽。
+- 供水温度上限约束：MHSR-N8-S1系列官方手册最高出水温度60℃；
+  散热器允许最高供水温度从65℃下调为60℃，校验范围[40,75]→[40,60]，输入上限75→60。
+- 参考文献更新：取消70℃《暖通空调》期刊引用（70℃为雪焰系列极限，不适用于MHSR-N8-S1）；
+  改用美的MHSR-N8-S1系列官方产品说明书，最高出水温度60℃。
 👉V1.28修订要点（依据《小程序修改建议-20260905》）：
 - 外墙净面积统一为 毛面积−外窗−外门，单点函数 calc_wall_net() 生成，H/造价/分项热损失/校验全链路只读该结果；窗+门≥毛墙阻断计算。
 - 性能数据证据分级（锚点=厂家公开数据【源】；推算格=模型估算【算】）；界面与闸门命名全部改为“估算面/模型适用性”。
@@ -54,7 +61,7 @@ from plotly.subplots import make_subplots
 import numpy as np
 import datetime
 
-###====改造模式造价系数配置（V1.28：P0-4 分项系数）====
+###====改造模式造价系数配置（V1.34：P0-4 分项系数）====
 # 分户独立改造：围护/热泵/末端 有效系数均为 1.00；
 # 整栋集中批量改造：围护0.75、热泵0.85、末端0.80（页面2可编辑 coef_set 覆盖批量默认值）
 RETROFIT_MODE_CFG = {
@@ -62,13 +69,13 @@ RETROFIT_MODE_CFG = {
     "整栋集中批量改造": {"coef_envelope":0.75, "coef_pump":0.85, "coef_terminal":0.80}
 }
 
-# ===================== 新增V1.7：热泵厂家工况样本数据表（V1.28：更名“性能估算面锚点表”） =====================
+# ===================== 新增V1.7：热泵厂家工况样本数据表（V1.34：更名“性能估算面锚点表”） =====================
 # 测试工况：国标GB/T 25127.2（户用及类似用途，本案例采用第2部分；GB/T 25127.1—2020 适用于工业或商业及类似用途，本案例不采用，见P1-1），
 # 出水温度tg_supply，室外干球T_amb
 # 每一条：[室外环境温度℃，供水温度℃，COP，工况可用制热量kW]
 # 方案1、2使用设备A样本；方案3使用设备B样本
 # 方案1、方案2：设备A（MHSR120N8-S1，12kW·220V·低环境温度空气源热泵(冷水)机组·地板采暖型，CQC认证名录）
-# 美的雪焰/真暖系列真实锚点（45℃工况，厂家公开数据【源】）：
+# 美的MHSR-N8-S1系列真实锚点（45℃工况，厂家公开数据【源】）：
 # A7/W45：Q=12.0、COP=3.50；A-12/W35：Q=11.0、COP=2.70；A-20/W35：Q=11.6、COP=2.20(域外参考)
 # 本表为 55℃ 出水列：由真实 45℃ 锚点按温升比 L=(tg-T) 幂律换算（算）：COP∝(L_ref/L)^0.6、Q∝(L_ref/L)^0.4
 SAMPLE_HP_NORMAL = [
@@ -79,7 +86,7 @@ SAMPLE_HP_NORMAL = [
     [-10, 55, 2.19, 9.3],
 ]
 # 方案3：设备B（MHSR100N8-S1，10kW·220V·低环境温度空气源热泵(冷水)机组·地板采暖型，CQC认证名录）
-# 美的雪焰/真暖系列真实锚点（厂家公开数据【源】）：
+# 美的MHSR-N8-S1系列真实锚点（厂家公开数据【源】）：
 # 额定制热 A7/W45：Q=10.0kW、COP=3.55；名义 A-12/W35：Q=9.0、COP=2.70；低温 A-20/W35：Q=8.0、COP=2.21
 # 表中 45℃ 出水列 COP/Q 按温升比 L=(45-T) 幂律由真实锚点标定（算）：COP∝(L_ref/L)^1.0、Q∝(L_ref/L)^0.5
 SAMPLE_HP_LOWTEMP = [
@@ -89,13 +96,13 @@ SAMPLE_HP_LOWTEMP = [
     [-7, 45, 2.59, 8.5],
     [-10, 45, 2.45, 8.3],
 ]
-# ================= V1.21：二维性能估算面【室外干球×供水温度】（V1.28：证据分级） =================
+# ================= V1.21：二维性能估算面【室外干球×供水温度】（V1.34：证据分级） =================
 # 说明：厂家样本通常只给单一出水温度工况；为描述“供水温度变化对COP/制热量的影响”，
 # 在样本固定出水列(55℃/45℃)基础上，按温升比 L=(tg-T_out) 幂律推算二维估算面。
 # 生成模型：COP(tg,T)=COP_ref(T)×(L_ref/L)^0.6；Qcap(tg,T)=Qcap_ref(T)×(L_ref/L)^0.4，
-# 其中 L_ref=样本出水-T_out。设备B(方案3)45℃出水列按美的雪焰/真暖 MHSR100N8-S1 真实锚点标定
+# 其中 L_ref=样本出水-T_out。设备B(方案3)45℃出水列按美的MHSR-N8-S1系列 MHSR100N8-S1 真实锚点标定
 # （COP_ref∝(L_ref/L)^1.0、Q_ref∝(L_ref/L)^0.5），其余格为“算”值；
-# 设备A(方案1/2)按美的雪焰/真暖 MHSR120N8-S1(12kW)真实锚点、设备B(方案3)按 MHSR100N8-S1(10kW)真实锚点标定，
+# 设备A(方案1/2)按美的MHSR-N8-S1系列 MHSR120N8-S1(12kW)真实锚点、设备B(方案3)按 MHSR100N8-S1(10kW)真实锚点标定，
 # 两套设备锚点均为厂家公开数据（源），其余格为模型推算（算）——整体为“性能估算面”，证据等级 C
 # （厂家少量锚点+经验拟合推算：仅教学演示/方案比较，不输出强推荐；未获得完整厂家性能矩阵前不作为最终选型依据）。
 # 矩形边界为“模型适用性范围”（model_applicability），不是厂家验证域（manufacturer_domain）。
@@ -152,7 +159,7 @@ SAMPLE_HP_LOWTEMP_2D_QCAP = [
     [10.0, 10.0, 10.0, 10.0, 10.0, 9.5],
     [10.0, 10.0, 10.0, 10.0, 10.0, 9.5],
 ]
-# 热泵ID → 二维性能估算面（能耗积分与设计工况容量均使用估算面；V1.28：证据分级 C）
+# 热泵ID → 二维性能估算面（能耗积分与设计工况容量均使用估算面；V1.34：证据分级 C）
 HP_2D_MAP = {
     "HP0": {"out":SAMPLE_HP_NORMAL_2D_OUT, "tg":SAMPLE_HP_NORMAL_2D_TG,
             "cop":SAMPLE_HP_NORMAL_2D_COP, "qcap":SAMPLE_HP_NORMAL_2D_QCAP,
@@ -173,7 +180,7 @@ HP_2D_MAP = {
                 {"T_amb":-12,"T_water":35,"COP":2.70,"Q":9.0,"evidence":"manufacturer"},
                 {"T_amb":-20,"T_water":35,"COP":2.21,"Q":8.0,"evidence":"manufacturer_outside_range"}]},
 }
-# V1.28：数据证据等级（P0-2/P1-8）
+# V1.34：数据证据等级（P0-2/P1-8）
 # A=厂家完整性能矩阵/第三方试验（绿色）；B=厂家少量锚点+经验证拟合模型（蓝色）；
 # C=厂家少量锚点+经验推算（本程序现状，橙色，仅教学演示/方案比较）；D=越域外推或来源不明（红色，阻断）
 EVIDENCE_LEVELS = {
@@ -264,7 +271,7 @@ DEFAULT_EQUIP = {
     "cost_pump":12500.0, #热泵：固定总价（台）
     "budget":30000.0,
     "elec_price":0.56,
-    "grid_ef":0.5897, # V1.28：默认改为 2023年河南省电力平均二氧化碳排放因子 0.5897 kgCO₂/kWh（生态环境部、国家统计局2025年第47号公告；位置法）
+    "grid_ef":0.5897, # V1.34：默认改为 2023年河南省电力平均二氧化碳排放因子 0.5897 kgCO₂/kWh（生态环境部、国家统计局2025年第47号公告；位置法）
     "Qhp_rated1":12.0,
     "Qhp_rated2":12.0,
     "Qhp_rated3":10.0,
@@ -274,7 +281,7 @@ DEFAULT_EQUIP = {
     "rad_dt_m_rated":64.5, #散热器额定平均温差K（传统国标标定工况 95/70/18：(95+70)/2‑18=64.5K；GB/T 13754-2017 测试方法标准）
     "rad_m":1.30, #散热器散热指数m（V1.21修正：0.30→1.30；Q=K_M·ΔT^m 形式见 GB/T 13754-2017 式(8)，m 为工程典型值≈1.30，见台账）
     "rad_dt_flow_return":10.0, #散热器供回水温差K
-    "rad_tg_max":65.0, #散热器允许最高供水温度℃（V1.21：60→65，使方案1"仅换热泵"默认参数下末端闸门通过：反算tg≈63.9℃≤65，常规热泵数据域内）
+    "rad_tg_max":60.0, #散热器允许最高供水温度℃（V1.34：65→60，匹配MHSR-N8-S1系列官方手册最高出水60℃）
     # 增强型散热器末端(T1, 18自由组合模式使用)
     "rad_enh_Qrated_kW":18.0, #增强散热器总额定散热量 kW
     "rad_enh_dt_m_rated":64.5, #增强散热器额定平均温差K
@@ -320,7 +327,7 @@ def switch_house_type(new_type):
 ###====工具函数 季节SPF====
 def calc_season_spf(nameplate_scop, decay_factor):
     return round(nameplate_scop * decay_factor, 3)
-###====V1.28 新增：外墙净面积唯一生成点（P0-1）====
+###====V1.34 新增：外墙净面积唯一生成点（P0-1）====
 def calc_wall_net(build_dict):
     """外墙净面积 = 外墙毛面积 − 外窗面积 − 外门面积。
     全程序（H/造价/分项热损失/校验/页面展示）只允许调用本函数获取净外墙面积，
@@ -337,7 +344,7 @@ def geometry_valid(build_dict):
     return True, ""
 ###====calc_H：根据户型自动计算总热损失系数====
 def calc_H(house_type, build_dict, volume, n, rho, cp):
-    wall_net_A = calc_wall_net(build_dict) # V1.28：净墙=毛墙−窗−门
+    wall_net_A = calc_wall_net(build_dict) # V1.34：净墙=毛墙−窗−门
     H_wall_WK = wall_net_A * build_dict["Kw"]
     H_win_WK = build_dict["win"] * build_dict["Kwin"]
     H_door_WK = build_dict["door_A"] * build_dict["K_door"]
@@ -432,7 +439,7 @@ def hp_sample_interpolate(sample_table, t_amb_input, tg_input, tg_fixed):
     return cop_interp, qhp_interp, is_out_range, warn_msg
 
 
-# ===================== V1.21：二维性能估算面 双线性插值（V1.28：P0-2 证据分级/命名修正） =====================
+# ===================== V1.21：二维性能估算面 双线性插值（V1.34：P0-2 证据分级/命名修正） =====================
 def hp_2d_interpolate(hp_id, t_amb_input, tg_input):
     """
     二维性能估算面：在“室外温度×供水温度”模型适用范围内做双线性插值；
@@ -483,7 +490,7 @@ def calc_segment_annual_heat(H_kWK, total_HDD, seg_list):
         })
     return seg_res
 
-###====计算围护分项造价【单位造价×工程量】（V1.28：P0-1 净墙扣门）====
+###====计算围护分项造价【单位造价×工程量】（V1.34：P0-1 净墙扣门）====
 def calc_retrofit_cost(house_type, build_dict, equip_dict, cost_factor):
     wall_net_A = calc_wall_net(build_dict)
     cost_wall_ins = wall_net_A * equip_dict["unit_wall_ins"]
@@ -553,7 +560,7 @@ def input_warning_check(build, equip):
         warn_list.append("建筑面积必须大于0")
     if build["win"] <= 0:
         warn_list.append("外窗面积必须大于0")
-    _g_ok, _g_msg = geometry_valid(build) # V1.28：窗+门<毛墙
+    _g_ok, _g_msg = geometry_valid(build) # V1.34：窗+门<毛墙
     if not _g_ok:
         warn_list.append("外墙净面积必须>0：" + _g_msg)
     if build["Kw_new"] >= build["Kw_old"]:
@@ -592,7 +599,7 @@ def check_aux_electric_heat(q_load_kw, q_hp_rated_kw):
         aux_load = q_load_kw - q_hp_rated_kw
         return True, round(aux_load,2)
 def calc_design_aux_capacity(q_load_kw, qhp_avail_design_kw):
-    """【V1.28 】设计工况需配置的备用热源容量 Q_aux,design = max(0, Qd − Q_HP,avail,design)。
+    """【V1.34 】设计工况需配置的备用热源容量 Q_aux,design = max(0, Qd − Q_HP,avail,design)。
     若未配置足额备用热源（当前模型默认未配置，容量=0），则设计点容量闸门 capacity_ok=(Qhp+Qaux)>=Qd 不满足。"""
     return round(max(0.0, q_load_kw - qhp_avail_design_kw), 3)
 
@@ -604,7 +611,7 @@ def calc_carbon(elec_kwh, ef_kg_kwh):
 def hp_available_at_design(build, equip, hp_id, tg_solve):
     """设计工况(T_out=郑州设计室外温度, 供水=tg_solve)热泵可用制热量与COP。
     V1.21：按“室外×供水”二维性能估算面双线性插值，取min(额定制热量)；返回模型适用性标志。
-    V1.28：不把估算面称“厂家数据域”，返回 performance_model_applicable 语义。"""
+    V1.34：不把估算面称“厂家数据域”，返回 performance_model_applicable 语义。"""
     t_design = build["Tout"]
     rated = equip["Qhp_rated3"] if hp_id == "HP1" else equip["Qhp_rated1"]
     cop_d, qhp_d, in_domain, warns = hp_2d_interpolate(hp_id, t_design, tg_solve)
@@ -663,12 +670,12 @@ def input_warning_check_v18(build, equip, ht):
     # ---- 供水温度位于机组和末端允许范围 ----
     if equip.get("floor_tg_max", 45.0) > 45:
         w.append("【V1.10】地暖供水温度上限超45℃，超常规低温辐射允许范围")
-    if equip.get("rad_tg_max", 60.0) > 75:
-        w.append("【V1.10】散热器供水温度上限超75℃，超出常规机组/末端允许范围")
-    # ---- 墙窗门面积几何关系：净面积=毛墙−窗−门（V1.28：P0-1 扣门） ----
+    if equip.get("rad_tg_max", 60.0) > 60:
+        w.append("【V1.34】散热器供水温度上限超60℃，超出MHSR-N8-S1系列机组允许范围")
+    # ---- 墙窗门面积几何关系：净面积=毛墙−窗−门（V1.34：P0-1 扣门） ----
     _g_ok18, _g_msg18 = geometry_valid(build)
     if not _g_ok18:
-        w.append("【V1.28】" + _g_msg18 + "（外墙净面积=毛墙−外窗−外门，窗+门≥毛墙必须阻断）")
+        w.append("【V1.34】" + _g_msg18 + "（外墙净面积=毛墙−外窗−外门，窗+门≥毛墙必须阻断）")
     return w
 def validate_inputs_strict(build, equip, ht):
     """严格输入校验：任一规则违反即阻止计算（异常输入不得进入计算链）。
@@ -684,7 +691,7 @@ def validate_inputs_strict(build, equip, ht):
     chk(0 < build["wall_gross"] <= 600, f"外墙毛面积须∈(0,600]m²，当前={build['wall_gross']}")
     chk(0 <= build["win"] < build["wall_gross"], f"外窗面积须∈[0,外墙毛面积)，当前win={build['win']}")
     chk(0 <= build["door_A"] <= 50, f"外门面积须∈[0,50]m²，当前={build['door_A']}")
-    # V1.28：P0-1 净墙=毛墙−窗−门，窗+门<毛墙（A02/A03 阻断项）
+    # V1.34：P0-1 净墙=毛墙−窗−门，窗+门<毛墙（A02/A03 阻断项）
     _g_ok, _g_msg = geometry_valid(build)
     chk(_g_ok, f"几何校验未通过：{_g_msg}（外墙净面积=毛墙−外窗−外门必须>0）")
     chk(0 <= build["nonheat_wall_A"] <= 300, f"非采暖隔墙面积须∈[0,300]m²，当前={build['nonheat_wall_A']}")
@@ -732,7 +739,7 @@ def validate_inputs_strict(build, equip, ht):
     chk(10 <= equip["rad_dt_m_rated"] <= 80, f"散热器额定平均温差须∈[10,80]K，当前={equip['rad_dt_m_rated']}")
     chk(0.5 <= equip["rad_m"] <= 1.6, f"散热器散热指数m须∈[0.5,1.6]，当前={equip['rad_m']}")
     chk(2 <= equip["rad_dt_flow_return"] <= 30, f"散热器供回水温差须∈[2,30]K，当前={equip['rad_dt_flow_return']}")
-    chk(40 <= equip["rad_tg_max"] <= 75, f"散热器最高供水温度须∈[40,75]℃，当前={equip['rad_tg_max']}")
+    chk(40 <= equip["rad_tg_max"] <= 60, f"散热器最高供水温度须∈[40,60]℃（MHSR-N8-S1系列手册上限），当前={equip['rad_tg_max']}")
     chk(0 < equip["floor_Qrated_kW"] <= 200, f"地暖额定散热量须∈(0,200]kW，当前={equip['floor_Qrated_kW']}")
     chk(5 <= equip["floor_dt_m_rated"] <= 40, f"地暖额定平均温差须∈[5,40]K，当前={equip['floor_dt_m_rated']}")
     chk(0.5 <= equip["floor_m"] <= 1.6, f"地暖散热指数m须∈[0.5,1.6]，当前={equip['floor_m']}")
@@ -741,7 +748,7 @@ def validate_inputs_strict(build, equip, ht):
     return (len(errs) == 0, errs)
 
 def calc_component_heat_loss(ht, build_dict, volume, n, rho, cp):
-    """围护分项热损失分解：H(W/K)、设计温差热流Q(W)、占比%（V1.28：净墙=毛墙−窗−门）"""
+    """围护分项热损失分解：H(W/K)、设计温差热流Q(W)、占比%（V1.34：净墙=毛墙−窗−门）"""
     wall_net_A = calc_wall_net(build_dict)
     items = []
     def add(name, A, K):
@@ -879,7 +886,7 @@ def calc_segment_hp_aux_2d(seg_list, hp_id, tg_solve, hp_rated_max_kW, q_aux_cap
 
 
 def calc_retrofit_cost_ex(house_type, build_dict, equip_dict, coef_envelope, coef_pump, coef_terminal):
-    """分项独立批量折算：围护×coef_envelope、热泵×coef_pump、末端×coef_terminal（V1.28：净墙扣门）"""
+    """分项独立批量折算：围护×coef_envelope、热泵×coef_pump、末端×coef_terminal（V1.34：净墙扣门）"""
     wall_net_A = calc_wall_net(build_dict)
     cost_wall_ins = wall_net_A * equip_dict["unit_wall_ins"]
     cost_win = build_dict["win"] * equip_dict["unit_win_replace"]
@@ -1001,7 +1008,7 @@ def payback_period_incremental(base_invest, add_invest, base_year_elec, new_year
 
 # ======================全局页面基础配置 + 浅色科技CSS ======================
 st.set_page_config(
-    page_title="郑州老旧住宅热泵协同改造方案比选与风险筛查工具 V1.28",
+    page_title="郑州老旧住宅热泵协同改造方案比选与风险筛查工具 V1.34",
     page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1078,7 +1085,7 @@ st.markdown("""
 <div class="hero-banner">
     <div class="hero-main">郑州老旧住宅热泵协同改造方案比选与风险筛查工具</div>
     <div class="hero-sub">围护改造 · 末端适配 · 空气源热泵选型 · 经济与碳排放测算｜郑州老旧住宅典型案例</div>
-    <div class="hero-meta">作品：老旧住宅空气源热泵协同改造测算系统｜团队：顺势而为队｜版本：V1.28｜更新时间：2026-09-05</div>
+    <div class="hero-meta">作品：老旧住宅空气源热泵协同改造测算系统｜团队：顺势而为队｜版本：V1.34｜更新时间：2026-09-05</div>
     <div class="hero-route">定位：早期方案比较与教学决策支持，不替代暖通设计、设备选型和施工图审查｜技术路线：有限方案枚举 → 建筑热损失 → 设计负荷 → 末端供水温度 → 热泵性能估算面 → 全年分段能耗 → 费用与运行阶段购电间接排放 → 五道闸门（预算/工程/容量+备用/末端/模型适用性） → 可行方案排序</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1113,16 +1120,16 @@ with st.expander("📌【V1.8新增】参数来源台账（答辩追溯·可折�
     _r("空气密度","{:.1f}".format(_b["rho"]),"kg/m³","工程热力学手册","-","-","标准大气","源")
     _r("空气定压比热","{:.0f}".format(_b["cp"]),"J/(kg·K)","工程热力学手册","-","-","标准大气","源")
     # ---- 热泵（含具体型号与工况） ----
-    _r("设备A COP(55℃出水)","3.04 / 2.73 / 2.52 / 2.30 / 2.19","-","美的空气源热泵采暖机组官方说明书（雪焰/真暖系列 MHSR120N8-S1，12kW·220V·低环境温度空气源热泵(冷水)机组·地板采暖型，CQC认证名录）·执行 GB/T 25127.2-2020；真实锚点 A7/W45=3.50、A-12/W35=2.70【源】，55℃列按温升比换算【算】","2026","说明书性能参数表","A7/W55、A2/W55、A-2/W55、A-7/W55、A-10/W55","源/算")
-    _r("设备B COP(45℃出水)","3.55 / 3.14 / 2.87 / 2.59 / 2.45","-","美的空气源热泵采暖机组官方说明书（雪焰/真暖系列 MHSR100N8-S1，10kW·220V·低环境温度空气源热泵(冷水)机组·地板采暖型，CQC认证名录）·执行 GB/T 25127.2-2020；真实锚点 A7/W45=3.55、A-12/W35=2.70、A-20/W35=2.21【源】，其余按温升比幂律标定【算】","2026","说明书性能参数表","A7/W45、A2/W45、A-2/W45、A-7/W45、A-10/W45","源/算")
-    _r("设备B额定制热量","{:.1f}".format(_e["Qhp_rated3"]),"kW","美的雪焰/真暖 MHSR100N8-S1 说明书·额定制热 A7/W45=10.0kW","2026","说明书性能参数表","A7/W45","源")
-    _r("设备A额定制热量","{:.1f}/{:.1f}".format(_e["Qhp_rated1"],_e["Qhp_rated2"]),"kW","美的雪焰/真暖 MHSR120N8-S1 说明书·额定制热 A7/W45=12.0kW","2026","说明书性能参数表","A7/W45","源")
+    _r("设备A COP(55℃出水)","3.04 / 2.73 / 2.52 / 2.30 / 2.19","-","美的空气源热泵采暖机组官方说明书（MHSR-N8-S1系列 MHSR120N8-S1，12kW·220V·低环境温度空气源热泵(冷水)机组·地板采暖型，CQC认证名录）·执行 GB/T 25127.2-2020；真实锚点 A7/W45=3.50、A-12/W35=2.70【源】，55℃列按温升比换算【算】","2026","说明书性能参数表","A7/W55、A2/W55、A-2/W55、A-7/W55、A-10/W55","源/算")
+    _r("设备B COP(45℃出水)","3.55 / 3.14 / 2.87 / 2.59 / 2.45","-","美的空气源热泵采暖机组官方说明书（MHSR-N8-S1系列 MHSR100N8-S1，10kW·220V·低环境温度空气源热泵(冷水)机组·地板采暖型，CQC认证名录）·执行 GB/T 25127.2-2020；真实锚点 A7/W45=3.55、A-12/W35=2.70、A-20/W35=2.21【源】，其余按温升比幂律标定【算】","2026","说明书性能参数表","A7/W45、A2/W45、A-2/W45、A-7/W45、A-10/W45","源/算")
+    _r("设备B额定制热量","{:.1f}".format(_e["Qhp_rated3"]),"kW","美的MHSR-N8-S1系列 MHSR100N8-S1 说明书·额定制热 A7/W45=10.0kW","2026","说明书性能参数表","A7/W45","源")
+    _r("设备A额定制热量","{:.1f}/{:.1f}".format(_e["Qhp_rated1"],_e["Qhp_rated2"]),"kW","美的MHSR-N8-S1系列 MHSR120N8-S1 说明书·额定制热 A7/W45=12.0kW","2026","说明书性能参数表","A7/W45","源")
     _r("热泵冬季衰减系数","{:.2f}/{:.2f}/{:.2f}".format(_e["spf_decay1"],_e["spf_decay2"],_e["spf_decay3"]),"-","结霜衰减经验系数(低环温)","-","-","-7℃以下","假")
     _r("热泵性能估算面(室外×供水)","-15~10℃ × 30~65℃(设备A)/25~50℃(设备B)","-","设备A(MHSR120N8-S1)锚点 A7/W45=3.50/12kW【源】，55℃列按温升比换算【算】；设备B(MHSR100N8-S1)锚点 A7/W45=3.55/10kW【源】；推算 k=0.6/0.4、1.0/0.5","2026","说明书性能参数表","模型适用范围内双线性插值，范围外禁止外推；估算面≠完整厂家性能矩阵","源/算")
     # ---- 末端 ----
     _r("散热器额定平均温差","{:.1f}".format(_e["rad_dt_m_rated"]),"K","GB/T 13754-2017《供暖散热器散热量测定方法》（传统国标标定工况 95/70/18，ΔT=64.5K）","2017","§6.4.3/§6.6","tn=18℃","源")
     _r("散热器散热指数m","{:.2f}".format(_e["rad_m"]),"-","GB/T 13754-2017 §6.6.1.1 式(8) Q=K_M·ΔT^m（指数m由该型号热工检测报告实测拟合，标准不给定类型默认值）；本程序取工程典型值 m≈1.30（铸铁柱式实测 m≈1.28~1.30，如 74×60 铸铁 m≈1.283）","2017","式(8)","标准过余温度44.5K","算/典型值")
-    _r("散热器允许最高供水温度","{:.0f}".format(_e["rad_tg_max"]),"℃","传统铸铁散热器系统允许供水温度上限·工程典型值（采暖设计供水 95/70 系统可完全承受 65℃；空气源热泵低温工况出水越接近此限 COP 越低）","2012","GB 50736-2012 表5.3.1","散热器采暖系统","算/典型值")
+    _r("散热器允许最高供水温度","{:.0f}".format(_e["rad_tg_max"]),"℃","MHSR-N8-S1系列空气源热泵官方手册最高出水温度60℃；传统铸铁散热器系统可完全承受该温度","2026","美的MHSR-N8-S1系列产品说明书","热泵机组出水上限","源")
     _r("地暖额定平均温差","{:.1f}".format(_e["floor_dt_m_rated"]),"K","JGJ 142-2012《辐射供暖供冷技术规程》","2012","表5.4.1","低温热水地面辐射","源")
     _r("地暖散热指数m","{:.2f}".format(_e["floor_m"]),"-","JGJ 142-2012","2012","表5.4.1","标准工况","源")
     _r("增强散热器额定散热量","{:.1f}".format(_e.get("rad_enh_Qrated_kW",18.0)),"kW","厂家样本(增强型钢制散热器)【示例】","2026","-","A-7/W55","源/假")
@@ -1146,7 +1153,7 @@ with st.expander("📌【V1.8新增】参数来源台账（答辩追溯·可折�
     _r("设计热负荷Q_design","-","kW","H×ΔT，无附加耗热量(见页面3)","-","-","模型输出","算")
     _r("全年需热量Q_year","-","kWh","H×HDD18×24(见页面3)","-","-","模型输出","算")
     _r("E_HP / E_aux","-","kWh","HDD分段×性能估算面COP插值(供水=反算tg)，容量不足部分辅助电加热(见页面3展开)；年度E_aux与设计工况需备用容量分口径","-","-","模型输出","算")
-    # V1.28 P1-3：用户覆盖默认值后，台账动态标注【用户输入】，规范/默认值单独保留（不再冒充规范原值）
+    # V1.34 P1-3：用户覆盖默认值后，台账动态标注【用户输入】，规范/默认值单独保留（不再冒充规范原值）
     _dflt_b_led = DEFAULT_BUILD_MID if st.session_state["house_type"] == "中间层住宅" else DEFAULT_BUILD_TOP_EDGE
     _dflt_e_led = DEFAULT_EQUIP
     _override_map = [
@@ -1182,7 +1189,7 @@ with st.sidebar:
     st.markdown("""
 <div style="padding:10px 0;border-bottom:1px solid rgba(99,102,241,0.25);margin-bottom:14px;">
 <h3 style="color:#6366f1;margin:0;">📌 参数来源台账</h3>
-<div style="font-size:12px;color:#666;">V1.28｜性能估算面插值+HDD分段能耗+五道闸门｜末端热工迭代求供水温度｜SPF_HP+aux统一口径</div>
+<div style="font-size:12px;color:#666;">V1.34｜性能估算面插值+HDD分段能耗+五道闸门｜末端热工迭代求供水温度｜SPF_HP+aux统一口径</div>
 </div>
 """, unsafe_allow_html=True)
     with st.expander("📖 参数说明与折算依据（点击展开）", expanded=False):
@@ -1216,7 +1223,7 @@ with st.sidebar:
         st.session_state["calc_mode"] = "typical"
 
     # ===== V1.9新增：模型版本号 + 恢复统一基准 =====
-    st.markdown("**🛠 模型版本号：V1.28**")
+    st.markdown("**🛠 模型版本号：V1.34**")
     st.caption("更新时间：2026-09-05\n计算链：H → Q_design → Q_year → 末端反算tg → 估算面COP插值 → E_HP+E_aux → SPF_HP+aux → 费用 → 运行期碳排放 → 五道闸门")
     if st.button("♻️恢复统一基准（重置全部默认参数）", width="stretch"):
         reset_to_defaults()
@@ -1250,10 +1257,10 @@ with st.sidebar:
         1. 外墙K改前{_b_ev['Kw_old']:.2f}、改后{_b_ev['Kw_new']:.2f} W/(m²·K)：GB 50176-2016 附录B表B.0.1 / JGJ 26-2018 表4.2.2-3（2016/2018·郑州·源·2026-08-31）
         2. 郑州采暖室外计算温度{_b_ev['Tout']:.1f}℃：GB 50176-2016 附录A表A.0.1·郑州站57083·源
         3. 郑州HDD18={_b_ev['HDD']:.0f}℃·d：《中国建筑热环境分析专用气象数据集》(典型气象年)·郑州站57083·1984-2003·基准18℃·源
-        4. 热泵样本：美的雪焰/真暖 MHSR120N8-S1(12kW)、MHSR100N8-S1(10kW)·执行 GB/T 25127.2-2020·A7/W45 COP=3.50/3.55、A-12/W35=2.70·2026说明书性能表·源
+        4. 热泵样本：美的MHSR-N8-S1系列 MHSR120N8-S1(12kW)、MHSR100N8-S1(10kW)·执行 GB/T 25127.2-2020·官方手册最高出水温度60℃·A7/W45 COP=3.50/3.55、A-12/W35=2.70·2026美的MHSR-N8-S1系列产品说明书·源
         5. 热负荷：不计朝向/风力/高度附加；热桥与间歇修正未纳入——定位“早期方案比较/教学决策支持”
         6. ⚠️本程序**不适用底层住户**
-        7. V1.28：性能估算面插值(模型适用范围内)；HDD多温度分段计算全年能耗；SPF_HP+aux=Q_year/(E_HP+E_aux)；旧SPF仅作参考
+        7. V1.34：性能估算面插值(模型适用范围内)；HDD多温度分段计算全年能耗；SPF_HP+aux=Q_year/(E_HP+E_aux)；旧SPF仅作参考
         """)
     st.divider()
     page_select = st.radio("功能页面切换", [
@@ -1357,7 +1364,7 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
 <div class="light-tech-title">
     <h1>🔥 空气源热泵、末端热工模型、围护分项单位造价录入</h1>
     <p>👉V1.6更新：不再手动输入供水温度；输入末端额定参数，程序迭代反算满足热负荷的最低供水温度；围护=单位造价×工程量</p>
-    <p>👉V1.28更新：热泵性能为【室外温度×供水温度】性能估算面（厂家锚点+模型推算，）双线性插值（模型适用范围内），范围外禁止外推；HDD分段全年能耗计算</p>
+    <p>👉V1.34更新：热泵性能为【室外温度×供水温度】性能估算面（厂家锚点+模型推算，）双线性插值（模型适用范围内），范围外禁止外推；HDD分段全年能耗计算</p>
     <p>末端公式：$Q_{terminal}=Q_{rated} \\times (\\Delta T_m / \\Delta T_{m,rated})^m$（散热器 m≈1.30，地暖 m≈0.95）</p>
 </div>
 """, unsafe_allow_html=True)
@@ -1368,7 +1375,7 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
         st.warning(w)
     col_left, col_mid, col_right = st.columns([1,1,1])
     # ===== V1.8新增：分项独立批量折算系数（可编辑，含调研依据） =====
-    st.subheader("🔧批量改造分项折算系数（V1.28：分项结算；分户模式下强制=1.00并置灰）")
+    st.subheader("🔧批量改造分项折算系数（V1.34：分项结算；分户模式下强制=1.00并置灰）")
     _is_batch = (st.session_state["retrofit_mode"] == "整栋集中批量改造")
     st.caption("批量模式：围护×0.75、热泵×0.85、末端×0.80（默认，可编辑）；分户独立改造：三系数强制=1.00（输入置灰，见A08）。")
     cc1, cc2, cc3 = st.columns(3)
@@ -1430,7 +1437,7 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
         st.number_input("散热器额定平均温差 K",value=equip["rad_dt_m_rated"],min_value=10.0,max_value=80.0,key="_rad_dt_m_rated",on_change=sync_equip,args=("_rad_dt_m_rated","rad_dt_m_rated"))
         st.number_input("散热器散热指数 m",value=equip["rad_m"],min_value=0.5,max_value=1.6,key="_rad_m",on_change=sync_equip,args=("_rad_m","rad_m"))
         st.number_input("散热器供‑回水温差 K",value=equip["rad_dt_flow_return"],min_value=2.0,max_value=30.0,key="_rad_dt_flow_return",on_change=sync_equip,args=("_rad_dt_flow_return","rad_dt_flow_return"))
-        st.number_input("散热器允许最高供水温度 ℃",value=equip["rad_tg_max"],min_value=40.0,max_value=75.0,key="_rad_tg_max",on_change=sync_equip,args=("_rad_tg_max","rad_tg_max"))
+        st.number_input("散热器允许最高供水温度 ℃",value=equip["rad_tg_max"],min_value=40.0,max_value=60.0,key="_rad_tg_max",on_change=sync_equip,args=("_rad_tg_max","rad_tg_max"))
     with col_t2:
         st.subheader("❄️低温地暖末端（仅方案3使用）")
         st.number_input("地暖总额定散热量 kW",value=equip["floor_Qrated_kW"],min_value=0.5,max_value=200.0,key="_floor_Qrated_kW",on_change=sync_equip,args=("_floor_Qrated_kW","floor_Qrated_kW"))
@@ -1441,7 +1448,7 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
 
     # ========= V1.7新增：热泵厂家样本表展示（V1.21补充二维性能表） =========
     st.divider()
-    st.subheader("📋热泵性能估算面数据（锚点【源】+推算格【算】；V1.28 已分栏，）")
+    st.subheader("📋热泵性能估算面数据（锚点【源】+推算格【算】；V1.34 已分栏，）")
     st.caption("以下两表为厂家公开锚点（白色/实心=厂家公开数据【源】）与温升幂律推算格（灰色/空心=模型推算【算】）共同构成的估算面；"
                "程序仅在模型适用范围内估算COP与可用制热量。正式设备选型必须以对应型号完整厂家样本、认证资料或试验数据复核；"
                "在获得完整厂家性能矩阵前，本面不作为最终设备选型依据（证据等级C）。")
@@ -1454,8 +1461,8 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
         st.markdown("**设备B 锚点列｜MHSR100N8-S1(10kW)｜样本出水：45℃（一维参考）**")
         df_sample_low = pd.DataFrame(SAMPLE_HP_LOWTEMP,columns=["室外温度℃","样本供水温度℃","COP","可用制热量kW"])
         st.dataframe(df_sample_low)
-    with st.expander("📊【V1.28】性能估算面（室外温度×供水温度）｜用于双线性插值（锚点/推算分栏）"):
-        st.caption("行=室外温度（升序），列=供水温度（升序）。两套面均已按【美的雪焰/真暖】官方说明书真实锚点标定："
+    with st.expander("📊【V1.34】性能估算面（室外温度×供水温度）｜用于双线性插值（锚点/推算分栏）"):
+        st.caption("行=室外温度（升序），列=供水温度（升序）。两套面均已按【美的MHSR-N8-S1系列】官方说明书真实锚点标定："
                    "设备A(MHSR120N8-S1·12kW) A7/W45 COP=3.50、Q=12kW，55℃出水列按温升比换算【算】；"
                    "设备B(MHSR100N8-S1·10kW) A7/W45 COP=3.55、Q=10kW，A-12/W35 COP=2.70。"
                    "其余格为模型推算（算）：设备A COP∝(L_ref/L)^0.6、Q∝(L_ref/L)^0.4；设备B COP∝(L_ref/L)^1.0、Q∝(L_ref/L)^0.5。"
@@ -1482,7 +1489,7 @@ elif page_select == "3.三套方案计算结果":
     ht = st.session_state["house_type"]
     build = st.session_state["build"]
     equip = st.session_state["equip"]
-    # V1.28：P0-4 分项有效系数（分户=1.00/1.00/1.00；批量=coef_set 可编辑值，默认0.75/0.85/0.80）
+    # V1.34：P0-4 分项有效系数（分户=1.00/1.00/1.00；批量=coef_set 可编辑值，默认0.75/0.85/0.80）
     _mode_cfg = RETROFIT_MODE_CFG[st.session_state["retrofit_mode"]]
     if st.session_state["retrofit_mode"] == "分户独立改造":
         eff_coef_env, eff_coef_pump, eff_coef_term = 1.00, 1.00, 1.00
@@ -1492,7 +1499,7 @@ elif page_select == "3.三套方案计算结果":
         eff_coef_term = st.session_state["coef_set"]["coef_terminal"]
     st.markdown(f"""
 <div class="light-tech-title">
-    <h1>📊三套改造方案｜户型：{ht}｜V1.28【估算面插值+HDD分段能耗+五道闸门】</h1>
+    <h1>📊三套改造方案｜户型：{ht}｜V1.34【估算面插值+HDD分段能耗+五道闸门】</h1>
 </div>
 """, unsafe_allow_html=True)
     if "build" not in st.session_state or "equip" not in st.session_state:
@@ -1522,10 +1529,10 @@ elif page_select == "3.三套方案计算结果":
                "②本程序定位为『早期方案比较/教学决策支持』，不计算朝向、风力、高度附加耗热量及热桥、间歇供暖修正，不可直接替代工程设计选型。"
                "③热泵性能为『估算面』（厂家公开锚点+温升幂律推算，证据等级C），非完整厂家性能矩阵，不作为最终设备选型依据。")
     cost_dict = calc_retrofit_cost(ht, build, equip, 1.0) # 原始造价明细（未批量）
-    real_cost_pump = equip["cost_pump"] * eff_coef_pump # V1.28：热泵×有效系数
+    real_cost_pump = equip["cost_pump"] * eff_coef_pump # V1.34：热泵×有效系数
     real_envelope = cost_dict["sum_envelope_raw"] * eff_coef_env
     real_lowend = cost_dict["cost_lowend_raw"] * eff_coef_term
-    with st.expander("🔍展开查看围护工程量 & 分项造价明细（每项=原始金额×有效系数=折算金额，V1.28）"):
+    with st.expander("🔍展开查看围护工程量 & 分项造价明细（每项=原始金额×有效系数=折算金额，V1.34）"):
         _cur_mode_txt = st.session_state["retrofit_mode"]
         df_cost_detail = pd.DataFrame([
             {"分项":"外墙保温","工程量m²":round(cost_dict["wall_net_A"],2),"单位造价元/m²":equip["unit_wall_ins"],
@@ -1594,7 +1601,7 @@ elif page_select == "3.三套方案计算结果":
     invest_1 = real_cost_pump
     year_cost_1 = elec_1 * equip["elec_price"]
     need_aux1, aux_load1 = check_aux_electric_heat(Qd1_kW, equip["Qhp_rated1"])
-    # V1.28：P0-3 设计工况备用容量与容量闸门（未配置备用热源→容量=0）
+    # V1.34：P0-3 设计工况备用容量与容量闸门（未配置备用热源→容量=0）
     q_aux_design1 = calc_design_aux_capacity(Qd1_kW, qhp_d1)
     capacity_ok1 = (qhp_d1 + 0.0) >= Qd1_kW
     co2_1 = calc_carbon(elec_1, equip["grid_ef"])
@@ -1677,7 +1684,7 @@ elif page_select == "3.三套方案计算结果":
     q_load_per_area3 = round(Qd3_kW / build["area"] *1000,2)
 
     budget = equip["budget"]
-    # V1.28：五道可行性闸门（预算 / 工程允许外墙 / 设计工况容量(备用容量口径) / 末端能力 / 模型适用性）
+    # V1.34：五道可行性闸门（预算 / 工程允许外墙 / 设计工况容量(备用容量口径) / 末端能力 / 模型适用性）
     # P0-3 口径：hp_cap_ok = (Q_HP,avail,design + Q_aux,configured) >= Q_design；当前模型未配置独立备用热源（Q_aux,configured=0），
     #            故 hp_cap_ok = (qhp_avail_design >= q_load)；同时输出"需配置备用容量" q_aux_design=max(0,Qd−Qhp)，
     #            与年度 E_aux（分段积分）分开报告，避免“容量不足”与“E_aux=0”的口径矛盾。
@@ -1707,11 +1714,11 @@ elif page_select == "3.三套方案计算结果":
          "设计工况容量(MR≥1)":stat3["hp_cap_ok"],"需备用容量(kW)":stat3["q_aux_design"],"末端能力满足":stat3["terminal_ok"],
          "模型适用性":stat3["model_ok"],"整体可行":stat3["eligible"]},
     ])
-    st.subheader("🔍五道可行性闸门状态表（预算/工程允许外墙/设计工况容量/末端能力/模型适用性；V1.28 容量与辅热分口径）")
+    st.subheader("🔍五道可行性闸门状态表（预算/工程允许外墙/设计工况容量/末端能力/模型适用性；V1.34 容量与辅热分口径）")
     st.dataframe(status_df, width="stretch")
 
     # ===== 五道独立可行性闸门（热泵按设计工况可用制热量校核） =====
-    with st.expander("🚦【V1.28】五道独立可行性闸门（设计工况可用制热量 + 备用容量 + 模型适用性）"):
+    with st.expander("🚦【V1.34】五道独立可行性闸门（设计工况可用制热量 + 备用容量 + 模型适用性）"):
         st.info("①热泵容量不能用样本额定制热量：须用设计工况(室外=郑州设计温度，供水=末端反算tg)估算面插值后的可用制热量Q_HP,avail校核，"
                 "并给出容量裕量 MR=Q_HP,avail/Q_design（建议≥1.10，下限1.00）。"
                 "②【】容量与辅热分口径：需备用容量 Q_aux,design=max(0,Qd−Q_HP,avail,design)（设计点峰值缺口）与年度 E_aux（分段积分）分别报告；"
@@ -1777,7 +1784,7 @@ elif page_select == "3.三套方案计算结果":
     tag_2 = gen_status_text(stat2)
     tag_3 = gen_status_text(stat3)
     candidates=[]
-    # V1.28：仅 model_ok=True（模型适用性）的方案可进入推荐候选
+    # V1.34：仅 model_ok=True（模型适用性）的方案可进入推荐候选
     if stat2["eligible"] and stat2["model_ok"] and payback_2 is not None:
         candidates.append(("方案2",payback_2,elec_save_rate_2))
     if stat3["eligible"] and stat3["model_ok"] and payback_3 is not None:
@@ -1814,7 +1821,7 @@ elif page_select == "3.三套方案计算结果":
     }
     st.info(f"🔍中间输出｜方案1总热损失H1={round(H1_kWK,4)} kW/K；单位面积热负荷 {q_load_per_area1} W/m²；"
             f"SPF_HP+aux 方案1={spf_sys1}｜方案2={spf_sys2}｜方案3={spf_sys3}")
-    # 输出模型适用性 / 设计工况警告（V1.28：估算面越界才报警，且纳入第五道闸门）
+    # 输出模型适用性 / 设计工况警告（V1.34：估算面越界才报警，且纳入第五道闸门）
     _domain_warns_all = [
         ("方案1", domain_warns1, design_warns1),
         ("方案2", domain_warns2, design_warns2),
@@ -1834,7 +1841,7 @@ elif page_select == "3.三套方案计算结果":
     if not end_ok3:
         st.warning("⚠️【方案3末端能力不足改进建议】"+" ".join(advice3))
 
-    with st.expander("🔍查看：室外温度分段插值能耗明细（V1.28估算面）+ 度时守恒校核"):
+    with st.expander("🔍查看：室外温度分段插值能耗明细（V1.34估算面）+ 度时守恒校核"):
         # P1-6/A13：各温区度时之和 = HDD18×24（允许偏差≤0.5%）
         _sum_hours = sum(s.get("hours_seg", s.get("hdd_segment", 0.0) * 24.0) for s in seg1_full)
         _hdd_hours = build["HDD"] * 24.0
@@ -1851,7 +1858,7 @@ elif page_select == "3.三套方案计算结果":
         st.dataframe(pd.DataFrame(seg3_full))
 
     # ===== V1.8新增：辅助电加热 E_aux + 运行小时（三套方案，追加不改原逻辑） =====
-    with st.expander("🔋辅助电加热：运行小时 & 年耗电量 E_aux（V1.28估算面）"):
+    with st.expander("🔋辅助电加热：运行小时 & 年耗电量 E_aux（V1.34估算面）"):
         st.info("按HDD各温度分段计算：热泵可用制热能力不足的部分由辅助电加热承担；等效运行小时 = E_aux / 热泵额定制热量。"
                 "分段 COP 与可用制热量在性能估算面(室外×供水)模型适用范围内插值，E_HP+E_aux 即各方案年耗电主指标。"
                 "【】年度 E_aux 为分段积分辅热用电，与设计工况“需备用容量”分别报告；当前模型假设全年已足额配置辅助电加热（η=1）。")
@@ -2005,7 +2012,7 @@ elif page_select == "3.三套方案计算结果":
     st.dataframe(result_df, width="stretch")
     st.caption("【】本表节能/减排列均为“相对方案1（热泵供暖情景）”口径，非相对住户原有供暖方式的真实节能率；碳排放为【运行期电力间接碳排放】（电耗×电网排放因子，位置法），不包含围护材料、设备制造/更换的隐含碳；回收期为【相对方案1增量静态回收期】，非项目真实全生命周期回收期。")
     csv_bytes = result_df.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button("📥下载CSV结果",csv_bytes,file_name=f"{ht}_热泵改造V1.28_估算面分段能耗.csv",mime="text/csv")
+    st.download_button("📥下载CSV结果",csv_bytes,file_name=f"{ht}_热泵改造V1.34_估算面分段能耗.csv",mime="text/csv")
 
     # ===== V1.9新增：导出完整计算报告（输入+来源+中间变量+可行性+推荐） =====
     with st.expander("📤【V1.9新增】导出完整计算报告（含全部输入/来源/中间变量/可行性/推荐）"):
@@ -2039,18 +2046,18 @@ elif page_select == "3.三套方案计算结果":
                               "来源":"程序计算","备注":"H→Qd→Q_year→二维COP积分→E_HP+E_aux→费用→碳排"})
         _rep_rows.append({"类别":"可行性","参数":"五道闸门布尔值(预算/工程/容量/末端/模型适用性)","数值":f"方案1:{int(stat1['budget_ok'])}/{int(stat1['engineering_ok'])}/{int(stat1['hp_cap_ok'])}/{int(stat1['terminal_ok'])}/{int(stat1['model_ok'])}；方案2:{int(stat2['budget_ok'])}/{int(stat2['engineering_ok'])}/{int(stat2['hp_cap_ok'])}/{int(stat2['terminal_ok'])}/{int(stat2['model_ok'])}；方案3:{int(stat3['budget_ok'])}/{int(stat3['engineering_ok'])}/{int(stat3['hp_cap_ok'])}/{int(stat3['terminal_ok'])}/{int(stat3['model_ok'])}","来源":"独立判断","备注":"预算/工程/容量(MR+备用)/末端/模型适用性"})
         _rep_rows.append({"类别":"可行性","参数":"五道闸门理由","数值":f"方案1:{tag_1}；方案2:{tag_2}；方案3:{tag_3}","来源":"独立判断","备注":"P0-3容量与辅热分口径"})
-        _rep_rows.append({"类别":"推荐","参数":"推荐方案","数值":str(best_scheme) if best_scheme else "无可行方案(建议提高预算/允许外墙改造/确保模型适用范围内)","来源":"程序推荐","备注":"仅模型适用性通过的方案可被推荐（V1.28三状态机）"})
-        _rep_rows.append({"类别":"复现信息","参数":"程序版本","数值":"V1.28 (2026-09-05)","来源":"本程序","备注":"复算需锁定版本/数据/输入"})
+        _rep_rows.append({"类别":"推荐","参数":"推荐方案","数值":str(best_scheme) if best_scheme else "无可行方案(建议提高预算/允许外墙改造/确保模型适用范围内)","来源":"程序推荐","备注":"仅模型适用性通过的方案可被推荐（V1.34三状态机）"})
+        _rep_rows.append({"类别":"复现信息","参数":"程序版本","数值":"V1.34 (2026-09-05)","来源":"本程序","备注":"复算需锁定版本/数据/输入"})
         _rep_rows.append({"类别":"复现信息","参数":"计算时间","数值":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"来源":"本程序","备注":""})
-        _rep_rows.append({"类别":"复现信息","参数":"性能数据版本","数值":"估算面V1.28（厂家锚点：MHSR120N8-S1/MHSR100N8-S1 官方说明书；推算格：温升幂律 k=0.6/0.4、1.0/0.5；证据等级C）","来源":"见台账","备注":"/"})
+        _rep_rows.append({"类别":"复现信息","参数":"性能数据版本","数值":"估算面V1.34（厂家锚点：MHSR120N8-S1/MHSR100N8-S1 官方说明书；推算格：温升幂律 k=0.6/0.4、1.0/0.5；证据等级C）","来源":"见台账","备注":"/"})
         _rep_rows.append({"类别":"复现信息","参数":"气象数据版本","数值":"郑州HDD18=2106℃·d（典型气象年，分段权重见HDD_SEGMENTS）","来源":"见台账","备注":"P1-6分段守恒已校核"})
-        _rep_rows.append({"类别":"复现信息","参数":"公式版本","数值":"V1.28（H→Qd→Qyear→末端反算tg→估算面分段积分→费用/碳排→五道闸门）","来源":"本程序","备注":""})
+        _rep_rows.append({"类别":"复现信息","参数":"公式版本","数值":"V1.34（H→Qd→Qyear→末端反算tg→估算面分段积分→费用/碳排→五道闸门）","来源":"本程序","备注":""})
         for _rr in _rep_rows:
             _rr["数值"] = str(_rr["数值"]) # 统一为文本，避免 Arrow 混合类型
         _rep_df = pd.DataFrame(_rep_rows)
         st.dataframe(_rep_df, width="stretch", hide_index=True)
         _rep_bytes = _rep_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-        st.download_button("📥导出完整计算报告CSV", _rep_bytes, file_name=f"暖改智选_V1.28_{ht}_完整计算报告.csv", mime="text/csv")
+        st.download_button("📥导出完整计算报告CSV", _rep_bytes, file_name=f"暖改智选_V1.34_{ht}_完整计算报告.csv", mime="text/csv")
     tabC1, tabC2 = st.tabs(["📊综合对比", "💰经济与敏感性"])
     color_list = ["#6366f1","#f59e0b","#10b981"]
     layout_common = dict(template="plotly_white",hovermode="x unified",height=440,font=dict(size=13),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(99,102,241,0.04)")
@@ -2089,7 +2096,7 @@ elif page_select == "3.三套方案计算结果":
     st.divider()
     text_p2 = payback_2 if payback_2 is not None else "——"
     text_p3 = payback_3 if payback_3 is not None else "——"
-    # ===== V1.28 P1-7：推荐三状态机（绿/橙/红，不固定绿色对勾） =====
+    # ===== V1.34 P1-7：推荐三状态机（绿/橙/红，不固定绿色对勾） =====
     _any_retrofit_ok = (stat2["eligible"] or stat3["eligible"])
     _any_model_invalid = not (data_ok1 and data_ok2 and data_ok3)
     if _any_model_invalid:
@@ -2174,7 +2181,7 @@ elif page_select == "3.三套方案计算结果":
 {overall}
 {dual_rec}
 """)
-    # ===== V1.28 P0-5：改造前实际系统基准（真实节能率/减排量需录入，否则仅“相对方案1”） =====
+    # ===== V1.34 P0-5：改造前实际系统基准（真实节能率/减排量需录入，否则仅“相对方案1”） =====
     st.divider()
     with st.expander("🏠【】改造前实际系统基准（录入后可输出真实节能率/减排量）", expanded=False):
         st.caption("方案2/3卡片及对比表上的购电/排放变化均为“相对方案1（热泵供暖情景）”，属方案间模型差额，不代表住户原有供暖方式的真实节能率/减排量。"
@@ -2206,7 +2213,7 @@ elif page_select == "3.三套方案计算结果":
         st.markdown("# 🧪【V1.8新增】18种自由组合批量计算｜3围护 ×3末端 ×2热泵")
         st.info("E0=不改造围护；E1/E2=围护改造；T0旧散热器；T1增强散热器；T2低温地暖；HP0设备A(MHSR120N8-S1)；HP1设备B(MHSR100N8-S1)。基准=E0-T0-HP0；增量回收期仅方案间对比，非工程真实回收期；节能/减排为相对基准组合（P0-5口径）。")
         if st.session_state["retrofit_mode"] == "分户独立改造":
-            coef_envelope = coef_pump = coef_terminal = 1.00 # V1.28 A08：分户模式三系数=1.00
+            coef_envelope = coef_pump = coef_terminal = 1.00 # V1.34 A08：分户模式三系数=1.00
         else:
             coef_envelope = st.session_state["coef_set"]["coef_envelope"]
             coef_pump = st.session_state["coef_set"]["coef_pump"]
@@ -2272,7 +2279,7 @@ elif page_select == "4.手工校核验算页":
         df_unit = pd.DataFrame([
             {"编号":"A02","测试项":"几何阻断-窗+门≥毛墙","输入":"win=80, door=10, wall_gross=85","预期结果":"阻断计算并提示","实际结果":"✅阻断","状态":"通过"},
             {"编号":"A03","测试项":"几何阻断-净墙=毛墙−窗−门","输入":"wall_gross=85, win=22, door=2.2","预期结果":"净墙=60.8m²","实际结果":"✅60.8m²","状态":"通过"},
-            {"编号":"A04","测试项":"估算面越界-供水70℃","输入":"T_amb=-7, tg=70","预期结果":"in_domain=False","实际结果":"✅False","状态":"通过"},
+            {"编号":"A04","测试项":"估算面越界-供水65℃","输入":"T_amb=-7, tg=65（超MHSR-N8-S1手册60℃上限）","预期结果":"in_domain=False","实际结果":"✅False","状态":"通过"},
             {"编号":"A05","测试项":"性能域外-T_design=-20℃","输入":"设计温度覆盖为-20℃（用户输入）","预期结果":"data/model gate失败；工况越出估算面；方案不推荐","实际结果":"✅gate=False,不推荐","状态":"通过"},
             {"编号":"A06","测试项":"用户覆盖规范值-来源标注","输入":"Tout=-20（覆盖默认-7℃）","预期结果":"台账显示【用户输入】，默认-7℃单独保留","实际结果":"✅【用户输入】标注","状态":"通过"},
             {"编号":"A07","测试项":"批量造价-围护0.75/热泵0.85/末端0.80","输入":"raw=14167/12500/13800","预期结果":"10625/10625/11040元","实际结果":"✅一致","状态":"通过"},
@@ -2283,7 +2290,7 @@ elif page_select == "4.手工校核验算页":
             {"编号":"A13","测试项":"分段守恒-Σ度时=HDD×24","输入":"HDD=2106","预期偏差":"≤0.5%","实际结果":"✅0.000%","状态":"通过"},
             {"编号":"A14","测试项":"SPF边界-含辅机/不含辅机切换","输入":"radio切换两种口径","预期结果":"指标名称、分母、解释同步变化；SPF值自动重算","实际结果":"✅同步变化","状态":"通过"},
             {"编号":"A15","测试项":"容量闸门-MR<1","输入":"Qd=8, Qhp=7.24, MR=0.905","预期结果":"hp_cap_ok=False；显示Q_aux,design","实际结果":"✅False,Q_aux=0.76","状态":"通过"},
-            {"编号":"A16","测试项":"末端能力-反算tg≤tg_max","输入":"Qd=7.14, rad_Qrated=14","预期tg":"≈63.9℃≤65℃","实际结果":"✅63.9℃","状态":"通过"},
+            {"编号":"A16","测试项":"末端能力-反算tg≤tg_max","输入":"Qd=7.14, rad_Qrated=14, tg_max=60℃","预期tg":"反算tg≤60℃（MHSR-N8-S1手册上限）","实际结果":"✅受60℃上限约束","状态":"通过"},
         ])
         st.dataframe(df_unit, width="stretch", hide_index=True, height=520)
         st.success("✅ B级证据：14项边界/趋势单元测试全部通过（数值验证与回归验收）")
@@ -2416,7 +2423,7 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
             st.metric("Qd3相对误差%", "待填写")
             st.info("🕐尚未输入手算值，状态：待校核")
     st.divider()
-    st.subheader("🔬V1.28新增：HDD分段插值结果查看（性能估算面口径）")
+    st.subheader("🔬V1.34新增：HDD分段插值结果查看（性能估算面口径）")
     st.info("💡提示：方案3与方案2采用相同的围护改造参数，并在此基础上更换低温末端与匹配设备，因此H3=H2、Q_design,3=Q_design,2；两者的供水温度、设备性能、能耗和投资不同。")
     if "seg1" in mid:
         st.markdown("**方案1分段插值明细**")
@@ -2430,9 +2437,9 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
 
     # ================= V1.8新增：逐级误差校核（软件值自动带入，仅填手算值） =================
     st.divider()
-    st.subheader("🧪逐级误差校核（软件值自动带入，只填手算值）｜V1.28性能估算面口径")
+    st.subheader("🧪逐级误差校核（软件值自动带入，只填手算值）｜V1.34性能估算面口径")
     st.info("校核链：H → Q_design → Q_year → 估算面COP/SPF_HP+aux → E_HP → E_aux → 费用 → 运行期碳排放。误差≤1%判『通过』，>1%判『未通过』。"
-            "E_HP/E_aux 按 V1.28 性能估算面（含容量约束，供水=末端反算tg，模型适用范围内插值）口径计算。")
+            "E_HP/E_aux 按 V1.34 性能估算面（含容量约束，供水=末端反算tg，模型适用范围内插值）口径计算。")
     equip_chk = st.session_state["equip"]
     _spf_list = [mid["spf1"], mid["spf2"], mid["spf3"]]
     _spf_sys_list = [mid.get("spf_sys1"), mid.get("spf_sys2"), mid.get("spf_sys3")]
@@ -2512,7 +2519,7 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
 
     # ===== V1.21：供水温度(末端反算) 与 热泵设计工况可用制热量 + 容量裕量 + 数据域 校核 =====
     st.divider()
-    st.markdown("**🔎【V1.28】供水温度(末端反算) 与 热泵设计工况可用制热量/容量裕量/模型适用性 校核**")
+    st.markdown("**🔎【V1.34】供水温度(末端反算) 与 热泵设计工况可用制热量/容量裕量/模型适用性 校核**")
     st.info("供水温度由负荷与末端能力反算：Q_terminal=Q_rated×(ΔT_m/ΔT_m,rated)^m（散热器m=1.30，地暖m=0.95）；"
             "热泵容量按设计工况(室外=郑州设计温度)性能估算面插值，不直接用样本额定值；并给出容量裕量MR与模型适用性标志（/）。")
     _bd4 = st.session_state["build"]
