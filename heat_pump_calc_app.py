@@ -388,6 +388,76 @@ def _apply_reset_defaults():
 if st.session_state.pop("_pending_reset", False):
     _apply_reset_defaults()
 
+# V1.35：载入方案的 pending 处理（必须在 sidebar widget 实例化之前执行，否则 house_type_sel 等不可写）
+if "_pending_load_scheme" in st.session_state:
+    _load_idx = st.session_state.pop("_pending_load_scheme")
+    _saved = st.session_state.get("saved_schemes", [])
+    if 0 <= _load_idx < len(_saved):
+        _s = _saved[_load_idx]
+        st.session_state["house_type"] = _s["户型"]
+        st.session_state["house_type_sel"] = _s["户型"]
+        _b_loaded = dict(_s["建筑"])
+        _b_loaded["volume"] = _b_loaded["area"] * _b_loaded["floor_h"]
+        _b_loaded["dT"] = _b_loaded["Tin"] - _b_loaded["Tout"]
+        st.session_state["build"] = _b_loaded
+        st.session_state["equip"] = dict(_s["设备"])
+        st.session_state["coef_set"] = dict(_s["系数"])
+        # V1.36：恢复造价模式/计算模式/外墙改造开关/SPF口径（原版本漏存，导致载入后计算结果不一致）
+        _rmode = _s.get("造价模式", "分户独立改造")
+        st.session_state["retrofit_mode"] = _rmode
+        st.session_state["retrofit_mode_sel"] = _rmode
+        _cmode = _s.get("计算模式", "typical")
+        st.session_state["calc_mode"] = _cmode
+        st.session_state["calc_mode_radio"] = "18种自由组合批量计算" if _cmode == "batch_18" else "三套典型方案"
+        _norm_num_dict(st.session_state["build"])
+        _norm_num_dict(st.session_state["equip"])
+        _norm_num_dict(st.session_state["coef_set"])
+        _clear_widget_state(extra_prefixes=("load_scheme_",))
+        # V1.37：显式写回全部输入控件状态（与 _apply_reset_defaults 同一机制）。
+        # 仅靠 _clear_widget_state 删除 key 后"按 value= 重建"在某些 Streamlit 版本下不可靠，
+        # 会出现 build["area"]=110 但输入框仍显示 120 的不一致。此处逐个写回确保输入框与业务字典一致。
+        _b = st.session_state["build"]; _e = st.session_state["equip"]; _c = st.session_state["coef_set"]
+        _w = {
+            # ---- 页面1 建筑围护 ----
+            "_area": _b["area"], "_floor_h": _b["floor_h"], "_wall_gross": _b["wall_gross"],
+            "_win": _b["win"], "_door_A": _b["door_A"], "_nonheat_wall_A": _b["nonheat_wall_A"],
+            "_roof_A": _b.get("roof_A", 0.0), "_gable_wall_A": _b.get("gable_wall_A", 0.0),
+            "_Kw_old": _b["Kw_old"], "_Kw_new": _b["Kw_new"], "_Kwin_old": _b["Kwin_old"],
+            "_Kwin_new": _b["Kwin_new"], "_K_door_old": _b["K_door_old"], "_K_door_new": _b["K_door_new"],
+            "_K_nonheat_old": _b["K_nonheat_old"], "_K_nonheat_new": _b["K_nonheat_new"],
+            "_K_roof_old": _b.get("K_roof_old", 0.30), "_K_roof_new": _b.get("K_roof_new", 0.18),
+            "_K_gable_old": _b.get("K_gable_old", 1.50), "_K_gable_new": _b.get("K_gable_new", 0.45),
+            "_Tin": _b["Tin"], "_Tout": _b["Tout"], "_HDD": _b["HDD"],
+            "_n": _b["n"], "_rho": _b["rho"], "_cp": _b["cp"],
+            # ---- 页面2 批量折算系数 ----
+            "_coef_env": _c["coef_envelope"], "_coef_pump": _c["coef_pump"], "_coef_term": _c["coef_terminal"],
+            # ---- 页面2 热泵 ----
+            "_SCOPnp1": _e["SCOP_nameplate1"], "_SCOPnp2": _e["SCOP_nameplate2"], "_SCOPnp3": _e["SCOP_nameplate3"],
+            "_decay1": _e["spf_decay1"], "_decay2": _e["spf_decay2"], "_decay3": _e["spf_decay3"],
+            "_Qhp_rated1": _e["Qhp_rated1"], "_Qhp_rated2": _e["Qhp_rated2"], "_Qhp_rated3": _e["Qhp_rated3"],
+            # ---- 页面2 单位造价与经济 ----
+            "_unit_wall_ins": _e["unit_wall_ins"], "_unit_win_replace": _e["unit_win_replace"],
+            "_unit_door_replace": _e["unit_door_replace"], "_unit_nonheat_ins": _e["unit_nonheat_ins"],
+            "_unit_roof_ins": _e["unit_roof_ins"], "_unit_gable_ins": _e["unit_gable_ins"],
+            "_unit_lowend_floor": _e["unit_lowend_floor"],
+            "_cost_pump": _e["cost_pump"], "_budget": _e["budget"],
+            "_elec_price": _e["elec_price"], "_grid_ef": _e["grid_ef"],
+            # ---- 页面2 末端 ----
+            "_rad_Qrated_kW": _e["rad_Qrated_kW"], "_rad_dt_m_rated": _e["rad_dt_m_rated"],
+            "_rad_m": _e["rad_m"], "_rad_dt_flow_return": _e["rad_dt_flow_return"], "_rad_tg_max": _e["rad_tg_max"],
+            "_floor_Qrated_kW": _e["floor_Qrated_kW"], "_floor_dt_m_rated": _e["floor_dt_m_rated"],
+            "_floor_m": _e["floor_m"], "_floor_dt_flow_return": _e["floor_dt_flow_return"], "_floor_tg_max": _e["floor_tg_max"],
+            # ---- 页面3 允许外墙改造 / SPF口径 ----
+            "_allow_wall": _s.get("允许外墙改造", True),
+            "_spf_mode": _s.get("SPF口径", "含辅机 SPF_HP+aux"),
+            # ---- 侧边栏 户型 / 造价模式 / 计算模式 ----
+            "house_type_sel": _s["户型"],
+            "retrofit_mode_sel": _rmode,
+            "calc_mode_radio": "18种自由组合批量计算" if _cmode == "batch_18" else "三套典型方案",
+        }
+        for _k, _v in _w.items():
+            st.session_state[_k] = _v
+
 def switch_house_type(new_type):
     """切换户型，加载对应默认参数"""
     st.session_state["house_type"] = new_type
@@ -1312,27 +1382,39 @@ with st.sidebar:
     if st.session_state.pop("_reset_toast", False):
         st.success("已恢复统一基准：建筑/设备/批量系数回到默认值（所有输入框已同步还原为默认值）")
     # ===== V1.10新增：保存方案快照（可载入） =====
-    if st.button("💾保存当前方案", width="stretch"):
+    _n_saved = len(st.session_state.get("saved_schemes", []))
+    if st.button(f"💾保存当前方案（已存{_n_saved}个）", key="save_scheme_btn", width="stretch"):
+        _build_snap = dict(st.session_state["build"])
+        _build_snap["volume"] = _build_snap["area"] * _build_snap["floor_h"]
+        _build_snap["dT"] = _build_snap["Tin"] - _build_snap["Tout"]
         _snap = {
             "时间": datetime.datetime.now().strftime("%m-%d %H:%M"),
             "户型": st.session_state["house_type"],
-            "建筑": dict(st.session_state["build"]),
+            "建筑": _build_snap,
             "设备": dict(st.session_state["equip"]),
             "系数": dict(st.session_state["coef_set"]),
+            "造价模式": st.session_state.get("retrofit_mode", "分户独立改造"),
+            "计算模式": st.session_state.get("calc_mode", "typical"),
+            "允许外墙改造": st.session_state.get("cfg_allow_wall", True),
+            "SPF口径": st.session_state.get("cfg_spf_mode", "含辅机 SPF_HP+aux"),
         }
         if "saved_schemes" not in st.session_state:
             st.session_state["saved_schemes"] = []
         st.session_state["saved_schemes"].append(_snap)
+        st.toast(f"✅ 已保存方案{len(st.session_state['saved_schemes'])}（{_snap['时间']}，{_snap['户型']}）")
         st.success(f"已保存方案{len(st.session_state['saved_schemes'])}（{_snap['时间']}，{_snap['户型']}）")
     if st.session_state.get("saved_schemes"):
-        with st.expander(f"📚已保存方案（{len(st.session_state['saved_schemes'])}个，点击载入）"):
+        with st.expander(f"📚已保存方案（{len(st.session_state['saved_schemes'])}个，点击载入）", expanded=True):
             for _si, _s in enumerate(st.session_state["saved_schemes"]):
-                if st.button(f"载入方案{_si+1}｜{_s['时间']}｜{_s['户型']}", key=f"load_scheme_{_si}", width="stretch"):
-                    st.session_state["build"] = _s["建筑"]
-                    st.session_state["equip"] = _s["设备"]
-                    st.session_state["coef_set"] = _s["系数"]
-                    _clear_widget_state()  # 载入方案同步更新输入框显示，避免输入/计算不一致
-                    st.rerun()
+                _col_load, _col_del = st.columns([5, 1])
+                with _col_load:
+                    if st.button(f"载入方案{_si+1}｜{_s['时间']}｜{_s['户型']}", key=f"load_scheme_{_si}", width="stretch"):
+                        st.session_state["_pending_load_scheme"] = _si
+                        st.rerun()
+                with _col_del:
+                    if st.button("🗑", key=f"del_scheme_{_si}", help="删除此方案"):
+                        st.session_state["saved_schemes"].pop(_si)
+                        st.rerun()
     st.divider()
     _b_ev=st.session_state["build"]; _e_ev=st.session_state["equip"]
     with st.expander("📋 参数证据链（点击展开/折叠）", expanded=False):
@@ -1601,6 +1683,9 @@ elif page_select == "3.三套方案计算结果":
     allow_wall_retrofit = st.checkbox("✅允许外墙围护改造（若小区外立面限制可取消勾选）",value=True, key="_allow_wall")
     spf_mode = st.radio("🧮SPF计算口径（A14：加入/不加入辅机）", ["含辅机 SPF_HP+aux", "不含辅机 SPF_HP（仅热泵主机）"], horizontal=True, key="_spf_mode")
     spf_include_aux = (spf_mode == "含辅机 SPF_HP+aux")
+    # V1.36：把页面3的开关/口径同步到非"_"前缀的持久 key，避免切换页面后被 _clear_widget_state 清除，保存方案时读取持久 key
+    st.session_state["cfg_allow_wall"] = allow_wall_retrofit
+    st.session_state["cfg_spf_mode"] = spf_mode
     spf1 = calc_season_spf(equip["SCOP_nameplate1"], equip["spf_decay1"])
     spf2 = calc_season_spf(equip["SCOP_nameplate2"], equip["spf_decay2"])
     spf3 = calc_season_spf(equip["SCOP_nameplate3"], equip["spf_decay3"])
