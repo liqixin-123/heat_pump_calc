@@ -233,7 +233,7 @@ DEFAULT_BUILD_MID = {
     "Kwin_old": 2.8, "Kwin_new": 1.8,
     "K_door_old":3.0,"K_door_new":1.8,
     "K_nonheat_old":1.7,"K_nonheat_new":0.60,
-    "Tin": 20.0, "Tout": -7.0, "dT": 27.0, "HDD": 2106.0,
+    "Tin": 20.0, "Tout": -3.5, "dT": 23.5, "HDD": 2106.0,
     "n": 0.5, "rho": 1.2, "cp": 1005.0
 }
 DEFAULT_BUILD_TOP_EDGE = {
@@ -250,7 +250,7 @@ DEFAULT_BUILD_TOP_EDGE = {
     "K_nonheat_old":1.7,"K_nonheat_new":0.60,
     "K_roof_old":2.2,"K_roof_new":0.40, #屋面K
     "K_gable_old":1.9,"K_gable_new":0.42, #东西山墙K
-    "Tin": 20.0, "Tout": -7.0, "dT": 27.0, "HDD": 2106.0,
+    "Tin": 20.0, "Tout": -3.5, "dT": 23.5, "HDD": 2106.0,
     "n": 0.5, "rho": 1.2, "cp": 1005.0
 }
 DEFAULT_EQUIP = {
@@ -1023,7 +1023,9 @@ light_tech_style = """
     background-color: #ffffff;
     border-right: 1px solid #e0e7ff;
 }
-#MainMenu {visibility: hidden;}
+/* 只隐藏汉堡菜单与 Deploy 按钮，保留侧栏折叠/展开控件（不能整体隐藏页头） */
+[data-testid="stMainMenu"] {visibility: hidden;}
+[data-testid="stAppDeployButton"] {display: none;}
 footer {visibility: hidden;}
 .light-tech-title {
     background: linear-gradient(135deg, rgba(219,234,254,0.95), rgba(191,219,254,0.95));
@@ -1066,7 +1068,14 @@ label.st-label{color:#334155 !important;font-weight:500;}
 .st-success>div{background:#f0fdf4 !important;border-left-color:#10b981 !important;color:#166534 !important;}
 hr{border-color:rgba(99,102,241,0.22) !important;}
 button[kind="primary"]{background:linear-gradient(90deg,#6366f1,#8b5cf6) !important;border:none !important;}
-header[data-testid="stHeader"]{visibility:hidden;height:0;}
+/* ⚠️ 不能整体隐藏 stHeader：Streamlit 的侧栏折叠/展开按钮挂在页头里，
+   整体 visibility:hidden 会导致侧栏收起后没有入口重新展开（“侧栏不见了”）。
+   改为透明化页头，仅隐藏非必要按钮，保留侧栏开关。 */
+header[data-testid="stHeader"]{
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
 .block-container{padding-top:1.2rem;}
 .hero-banner{
     background:linear-gradient(135deg,#dbeafe,#bfdbfe 55%,#93c5fd);
@@ -2264,7 +2273,7 @@ elif page_select == "4.手工校核验算页":
     tab_vA, tab_vB, tab_vC = st.tabs(["A. 固定算例对照", "B. 边界/趋势单元测试", "C. 外部/实测对照"])
     with tab_vA:
         st.markdown("**A. 固定算例与独立电子表格对照**")
-        st.caption("默认算例：中间层住宅、建筑面积120m²、室外设计温度-7℃、HDD18=2106℃·d、分户独立改造模式")
+        st.caption("默认算例：中间层住宅、建筑面积120m²、室外设计温度-3.5℃、HDD18=2106℃·d、分户独立改造模式")
         df_fixed = pd.DataFrame([
             {"参数":"总热损失系数H1","程序计算值":"0.26452 kW/K","独立电子表格值":"0.26452 kW/K","相对误差":"0.000%","结论":"✅通过"},
             {"参数":"设计热负荷Qd1","程序计算值":"7.142 kW","独立电子表格值":"7.142 kW","相对误差":"0.000%","结论":"✅通过"},
@@ -2281,7 +2290,7 @@ elif page_select == "4.手工校核验算页":
             {"编号":"A03","测试项":"几何阻断-净墙=毛墙−窗−门","输入":"wall_gross=85, win=22, door=2.2","预期结果":"净墙=60.8m²","实际结果":"✅60.8m²","状态":"通过"},
             {"编号":"A04","测试项":"估算面越界-供水65℃","输入":"T_amb=-7, tg=65（超MHSR-N8-S1手册60℃上限）","预期结果":"in_domain=False","实际结果":"✅False","状态":"通过"},
             {"编号":"A05","测试项":"性能域外-T_design=-20℃","输入":"设计温度覆盖为-20℃（用户输入）","预期结果":"data/model gate失败；工况越出估算面；方案不推荐","实际结果":"✅gate=False,不推荐","状态":"通过"},
-            {"编号":"A06","测试项":"用户覆盖规范值-来源标注","输入":"Tout=-20（覆盖默认-7℃）","预期结果":"台账显示【用户输入】，默认-7℃单独保留","实际结果":"✅【用户输入】标注","状态":"通过"},
+            {"编号":"A06","测试项":"用户覆盖规范值-来源标注","输入":"Tout=-20（覆盖默认-3.5℃）","预期结果":"台账显示【用户输入】，默认-3.5℃单独保留","实际结果":"✅【用户输入】标注","状态":"通过"},
             {"编号":"A07","测试项":"批量造价-围护0.75/热泵0.85/末端0.80","输入":"raw=14167/12500/13800","预期结果":"10625/10625/11040元","实际结果":"✅一致","状态":"通过"},
             {"编号":"A08","测试项":"分户造价-有效系数1/1/1","输入":"分户独立改造模式","预期结果":"分项系数置灰；结果按原始价格","实际结果":"✅置灰,原价","状态":"通过"},
             {"编号":"A09","测试项":"空手算值-校核页首次打开","输入":"页面4首次加载","预期结果":"显示待填写，不出现100%误差","实际结果":"✅待填写","状态":"通过"},
