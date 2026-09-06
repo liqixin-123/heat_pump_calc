@@ -314,6 +314,80 @@ def _norm_num_dict(d):
         if isinstance(d[k], (int, float)) and not isinstance(d[k], bool):
             d[k] = float(d[k])
 
+def _clear_widget_state(extra_prefixes=()):
+    """清除输入控件的 widget 状态（key 以 _ 开头；extra_prefixes 可追加其他前缀，如 "chk_"），
+    使其在下次渲染时按 value= 默认值重建。
+    Streamlit 中带 key 的控件会优先保留 session_state 里的旧值：只重置业务字典 build/equip/coef_set
+    会导致输入框仍显示旧值（如层高2.70），而派生计算值（室内总体积等）已按默认参数重算——两者不一致
+    （即“重置后只重置了计算结果”问题）。"""
+    for _k in [k for k in list(st.session_state.keys()) if k.startswith("_")]:
+        del st.session_state[_k]
+    for _p in extra_prefixes:
+        for _k in [k for k in list(st.session_state.keys()) if k.startswith(_p)]:
+            del st.session_state[_k]
+
+def _apply_reset_defaults():
+    """恢复统一基准（完整版）：在脚本顶部执行，此时本 run 尚未实例化任何控件，
+    可安全地直接设置控件状态（Streamlit 禁止在控件实例化后改写其 key 值）。
+    重置范围：建筑/设备/批量系数 + 户型 + 改造造价模式 + 计算模式 +
+    允许外墙改造 + SPF口径 + 页面4手算校核输入。
+    关键点：除删除旧控件状态外，**显式把所有输入控件状态写回默认值**——
+    不依赖“删除后按 value= 重建”的版本语义，任何 Streamlit 版本都会按此值渲染。"""
+    st.session_state["house_type"] = "中间层住宅"
+    st.session_state["build"] = DEFAULT_BUILD_MID.copy()
+    st.session_state["equip"] = DEFAULT_EQUIP.copy()
+    st.session_state["coef_set"] = {"coef_envelope":0.75,"coef_pump":0.85,"coef_terminal":0.80}
+    st.session_state["retrofit_mode"] = "分户独立改造"
+    st.session_state["calc_mode"] = "typical"
+    _norm_num_dict(st.session_state["build"])
+    _norm_num_dict(st.session_state["equip"])
+    _norm_num_dict(st.session_state["coef_set"])
+    _clear_widget_state(extra_prefixes=("chk_",))
+    # 显式写回全部控件状态（此时控件尚未实例化，直接赋值是安全的）
+    _b = st.session_state["build"]; _e = st.session_state["equip"]; _c = st.session_state["coef_set"]
+    _w = {
+        # ---- 页面1 建筑围护 ----
+        "_area": _b["area"], "_floor_h": _b["floor_h"], "_wall_gross": _b["wall_gross"],
+        "_win": _b["win"], "_door_A": _b["door_A"], "_nonheat_wall_A": _b["nonheat_wall_A"],
+        "_roof_A": _b.get("roof_A", 0.0), "_gable_wall_A": _b.get("gable_wall_A", 0.0),
+        "_Kw_old": _b["Kw_old"], "_Kw_new": _b["Kw_new"], "_Kwin_old": _b["Kwin_old"],
+        "_Kwin_new": _b["Kwin_new"], "_K_door_old": _b["K_door_old"], "_K_door_new": _b["K_door_new"],
+        "_K_nonheat_old": _b["K_nonheat_old"], "_K_nonheat_new": _b["K_nonheat_new"],
+        "_K_roof_old": _b.get("K_roof_old", 0.30), "_K_roof_new": _b.get("K_roof_new", 0.18),
+        "_K_gable_old": _b.get("K_gable_old", 1.50), "_K_gable_new": _b.get("K_gable_new", 0.45),
+        "_Tin": _b["Tin"], "_Tout": _b["Tout"], "_HDD": _b["HDD"],
+        "_n": _b["n"], "_rho": _b["rho"], "_cp": _b["cp"],
+        # ---- 页面2 批量折算系数 ----
+        "_coef_env": _c["coef_envelope"], "_coef_pump": _c["coef_pump"], "_coef_term": _c["coef_terminal"],
+        # ---- 页面2 热泵 ----
+        "_SCOPnp1": _e["SCOP_nameplate1"], "_SCOPnp2": _e["SCOP_nameplate2"], "_SCOPnp3": _e["SCOP_nameplate3"],
+        "_decay1": _e["spf_decay1"], "_decay2": _e["spf_decay2"], "_decay3": _e["spf_decay3"],
+        "_Qhp_rated1": _e["Qhp_rated1"], "_Qhp_rated2": _e["Qhp_rated2"], "_Qhp_rated3": _e["Qhp_rated3"],
+        # ---- 页面2 单位造价与经济 ----
+        "_unit_wall_ins": _e["unit_wall_ins"], "_unit_win_replace": _e["unit_win_replace"],
+        "_unit_door_replace": _e["unit_door_replace"], "_unit_nonheat_ins": _e["unit_nonheat_ins"],
+        "_unit_roof_ins": _e["unit_roof_ins"], "_unit_gable_ins": _e["unit_gable_ins"],
+        "_unit_lowend_floor": _e["unit_lowend_floor"],
+        "_cost_pump": _e["cost_pump"], "_budget": _e["budget"],
+        "_elec_price": _e["elec_price"], "_grid_ef": _e["grid_ef"],
+        # ---- 页面2 末端 ----
+        "_rad_Qrated_kW": _e["rad_Qrated_kW"], "_rad_dt_m_rated": _e["rad_dt_m_rated"],
+        "_rad_m": _e["rad_m"], "_rad_dt_flow_return": _e["rad_dt_flow_return"], "_rad_tg_max": _e["rad_tg_max"],
+        "_floor_Qrated_kW": _e["floor_Qrated_kW"], "_floor_dt_m_rated": _e["floor_dt_m_rated"],
+        "_floor_m": _e["floor_m"], "_floor_dt_flow_return": _e["floor_dt_flow_return"], "_floor_tg_max": _e["floor_tg_max"],
+        # ---- 页面3 允许外墙改造 / SPF口径 / 改造前基准 ----
+        "_allow_wall": True, "_spf_mode": "含辅机 SPF_HP+aux",
+        "_base_type": "未录入（暂不输出真实节能率）", "_base_energy": 0.0, "_base_ef": 0.20,
+        # ---- 侧边栏 户型 / 造价模式 / 计算模式 ----
+        "house_type_sel": "中间层住宅", "retrofit_mode_sel": "分户独立改造", "calc_mode_radio": "三套典型方案",
+    }
+    for _k, _v in _w.items():
+        st.session_state[_k] = _v
+    st.session_state["_reset_toast"] = True
+
+if st.session_state.pop("_pending_reset", False):
+    _apply_reset_defaults()
+
 def switch_house_type(new_type):
     """切换户型，加载对应默认参数"""
     st.session_state["house_type"] = new_type
@@ -324,6 +398,7 @@ def switch_house_type(new_type):
     _norm_num_dict(st.session_state["build"])
     _norm_num_dict(st.session_state["equip"])
     _norm_num_dict(st.session_state["coef_set"])
+    _clear_widget_state()  # 切换户型时同步清除控件状态，输入框随默认参数更新
 ###====工具函数 季节SPF====
 def calc_season_spf(nameplate_scop, decay_factor):
     return round(nameplate_scop * decay_factor, 3)
@@ -770,13 +845,11 @@ def calc_component_heat_loss(ht, build_dict, volume, n, rho, cp):
     return items
 
 def reset_to_defaults():
-    """恢复统一基准：重置建筑/设备/批量系数为默认值（答辩演示用）"""
-    st.session_state["build"] = (DEFAULT_BUILD_MID if st.session_state["house_type"]=="中间层住宅" else DEFAULT_BUILD_TOP_EDGE).copy()
-    st.session_state["equip"] = DEFAULT_EQUIP.copy()
-    st.session_state["coef_set"] = {"coef_envelope":0.75,"coef_pump":0.85,"coef_terminal":0.80}
-    _norm_num_dict(st.session_state["build"])
-    _norm_num_dict(st.session_state["equip"])
-    _norm_num_dict(st.session_state["coef_set"])
+    """恢复统一基准（答辩演示用）：置位待重置标志并重跑，
+    实际重置由脚本顶部 _apply_reset_defaults() 在控件实例化之前统一执行——
+    否则此处（侧边栏按钮）控件已实例化，Streamlit 禁止再改写控件 key，重置将不完整。"""
+    st.session_state["_pending_reset"] = True
+    st.rerun()
 
 # ================= V1.8新增：18自由组合核心工具函数（原有函数全部保留） =================
 def calc_segment_hp_aux(seg_list, hp_sample_table, hp_sample_tg_fixed, tg_solve, hp_rated_max_kW):
@@ -1211,7 +1284,7 @@ with st.sidebar:
   - 空气源热泵设备安装 **0.85**：厂家批量供货、统一班组安装，省去零散上门差旅成本；
   - 室内末端改造 **0.80**：批量进场、开槽回填工序统一调度。
 """)
-    sel_house = st.selectbox("🏠选择户型",["中间层住宅","顶层边户"])
+    sel_house = st.selectbox("🏠选择户型",["中间层住宅","顶层边户"], key="house_type_sel")
     if sel_house != st.session_state["house_type"]:
         switch_house_type(sel_house)
     ht = st.session_state["house_type"]
@@ -1219,13 +1292,13 @@ with st.sidebar:
         st.info("【中间层住宅】上下均采暖住户；不计屋面、地面楼板；构件：外墙、外窗、外门、非采暖隔墙")
     else:
         st.info("【顶层边户】顶层+东西山墙边户；计入屋面、东西山墙；不计底层地面楼板")
-    st.session_state["retrofit_mode"] = st.selectbox("🔧改造造价模式", list(RETROFIT_MODE_CFG.keys()))
+    st.session_state["retrofit_mode"] = st.selectbox("🔧改造造价模式", list(RETROFIT_MODE_CFG.keys()), key="retrofit_mode_sel")
     if st.session_state["retrofit_mode"] == "整栋集中批量改造":
         st.info(f"批量有效系数：围护 {st.session_state['coef_set']['coef_envelope']}｜热泵 {st.session_state['coef_set']['coef_pump']}｜末端 {st.session_state['coef_set']['coef_terminal']}（分项结算）")
     else:
         st.info("分户独立改造：围护/热泵/末端有效系数均=1.00")
     # ===== V1.8新增：计算模式切换 =====
-    st.session_state["calc_mode"] = st.radio("🧮计算模式",["三套典型方案","18种自由组合批量计算"])
+    st.session_state["calc_mode"] = st.radio("🧮计算模式",["三套典型方案","18种自由组合批量计算"], key="calc_mode_radio")
     if st.session_state["calc_mode"] == "18种自由组合批量计算":
         st.session_state["calc_mode"] = "batch_18"
     else:
@@ -1236,7 +1309,8 @@ with st.sidebar:
     st.caption("更新时间：2026-09-05\n计算链：H → Q_design → Q_year → 末端反算tg → 估算面COP插值 → E_HP+E_aux → SPF_HP+aux → 费用 → 运行期碳排放 → 五道闸门")
     if st.button("♻️恢复统一基准（重置全部默认参数）", width="stretch"):
         reset_to_defaults()
-        st.success("已恢复统一基准：建筑/设备/批量系数回到默认值")
+    if st.session_state.pop("_reset_toast", False):
+        st.success("已恢复统一基准：建筑/设备/批量系数回到默认值（所有输入框已同步还原为默认值）")
     # ===== V1.10新增：保存方案快照（可载入） =====
     if st.button("💾保存当前方案", width="stretch"):
         _snap = {
@@ -1257,6 +1331,7 @@ with st.sidebar:
                     st.session_state["build"] = _s["建筑"]
                     st.session_state["equip"] = _s["设备"]
                     st.session_state["coef_set"] = _s["系数"]
+                    _clear_widget_state()  # 载入方案同步更新输入框显示，避免输入/计算不一致
                     st.rerun()
     st.divider()
     _b_ev=st.session_state["build"]; _e_ev=st.session_state["equip"]
@@ -1277,7 +1352,7 @@ with st.sidebar:
         "2.热泵&末端热工&单位造价录入",
         "3.三套方案计算结果",
         "4.手工校核验算页"
-    ])
+    ], key="page_select_radio")
 
 # ======================页面1：建筑围护参数录入 ======================
 if page_select == "1.建筑围护参数录入":
@@ -1523,8 +1598,8 @@ elif page_select == "3.三套方案计算结果":
         for _e in _errs_in:
             st.error("• " + _e)
         st.stop()
-    allow_wall_retrofit = st.checkbox("✅允许外墙围护改造（若小区外立面限制可取消勾选）",value=True)
-    spf_mode = st.radio("🧮SPF计算口径（A14：加入/不加入辅机）", ["含辅机 SPF_HP+aux", "不含辅机 SPF_HP（仅热泵主机）"], horizontal=True)
+    allow_wall_retrofit = st.checkbox("✅允许外墙围护改造（若小区外立面限制可取消勾选）",value=True, key="_allow_wall")
+    spf_mode = st.radio("🧮SPF计算口径（A14：加入/不加入辅机）", ["含辅机 SPF_HP+aux", "不含辅机 SPF_HP（仅热泵主机）"], horizontal=True, key="_spf_mode")
     spf_include_aux = (spf_mode == "含辅机 SPF_HP+aux")
     spf1 = calc_season_spf(equip["SCOP_nameplate1"], equip["spf_decay1"])
     spf2 = calc_season_spf(equip["SCOP_nameplate2"], equip["spf_decay2"])
@@ -2336,8 +2411,8 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
     st.divider()
     col_h1, col_h2 = st.columns(2)
     with col_h1:
-        st.number_input("软件 H1(kW/K)", value=mid["H1_kWK"], disabled=True)
-        hand_H1 = st.number_input("✍️手算 H1(kW/K)", value=0.0)
+        st.number_input("软件 H1(kW/K)", value=mid["H1_kWK"], disabled=True, format="%.4f")
+        hand_H1 = st.number_input("✍️手算 H1(kW/K)", value=0.0, format="%.4f")
         if hand_H1 > 0:
             err_H1 = abs(mid["H1_kWK"] - hand_H1)
             rel_H1 = err_H1 / mid["H1_kWK"] * 100 if mid["H1_kWK"] != 0 else 0.0
@@ -2351,8 +2426,8 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
             st.metric("H1相对误差%", "待填写")
             st.info("🕐尚未输入手算值，状态：待校核（空值不按0处理，）")
     with col_h2:
-        st.number_input("软件 Qd1(kW)", value=mid["Qd1_kW"], disabled=True)
-        hand_Qd1 = st.number_input("✍️手算 Qd1(kW)", value=0.0)
+        st.number_input("软件 Qd1(kW)", value=mid["Qd1_kW"], disabled=True, format="%.4f")
+        hand_Qd1 = st.number_input("✍️手算 Qd1(kW)", value=0.0, format="%.4f")
         if hand_Qd1 > 0:
             err_Qd1 = abs(mid["Qd1_kW"] - hand_Qd1)
             rel_Qd1 = err_Qd1 / mid["Qd1_kW"] * 100 if mid["Qd1_kW"] != 0 else 0.0
@@ -2369,8 +2444,8 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
     st.subheader("方案2 H2 / Qd2 手算校核")
     col_h3, col_h4 = st.columns(2)
     with col_h3:
-        st.number_input("软件 H2(kW/K)", value=mid["H2_kWK"], disabled=True)
-        hand_H2 = st.number_input("✍️手算 H2(kW/K)", value=0.0)
+        st.number_input("软件 H2(kW/K)", value=mid["H2_kWK"], disabled=True, format="%.4f")
+        hand_H2 = st.number_input("✍️手算 H2(kW/K)", value=0.0, format="%.4f")
         if hand_H2 > 0:
             err_H2 = abs(mid["H2_kWK"] - hand_H2)
             rel_H2 = err_H2 / mid["H2_kWK"] * 100 if mid["H2_kWK"] != 0 else 0.0
@@ -2384,8 +2459,8 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
             st.metric("H2相对误差%", "待填写")
             st.info("🕐尚未输入手算值，状态：待校核")
     with col_h4:
-        st.number_input("软件 Qd2(kW)", value=mid["Qd2_kW"], disabled=True)
-        hand_Qd2 = st.number_input("✍️手算 Qd2(kW)", value=0.0)
+        st.number_input("软件 Qd2(kW)", value=mid["Qd2_kW"], disabled=True, format="%.4f")
+        hand_Qd2 = st.number_input("✍️手算 Qd2(kW)", value=0.0, format="%.4f")
         if hand_Qd2 > 0:
             err_Qd2 = abs(mid["Qd2_kW"] - hand_Qd2)
             rel_Qd2 = err_Qd2 / mid["Qd2_kW"] *100 if mid["Qd2_kW"] !=0 else 0.0
@@ -2402,8 +2477,8 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
     st.subheader("方案3 H3 / Qd3 手算校核（方案3围护与方案2相同，H3=H2）")
     col_h5, col_h6 = st.columns(2)
     with col_h5:
-        st.number_input("软件 H3(kW/K)", value=mid["H3_kWK"], disabled=True)
-        hand_H3 = st.number_input("✍️手算 H3(kW/K)", value=0.0)
+        st.number_input("软件 H3(kW/K)", value=mid["H3_kWK"], disabled=True, format="%.4f")
+        hand_H3 = st.number_input("✍️手算 H3(kW/K)", value=0.0, format="%.4f")
         if hand_H3 > 0:
             err_H3 = abs(mid["H3_kWK"] - hand_H3)
             rel_H3 = err_H3 / mid["H3_kWK"] *100 if mid["H3_kWK"] != 0 else 0.0
@@ -2417,8 +2492,8 @@ $H_{total}=\sum H_{envelope} + H_{inf}\quad [kW/K]$
             st.metric("H3相对误差%", "待填写")
             st.info("🕐尚未输入手算值，状态：待校核")
     with col_h6:
-        st.number_input("软件 Qd3(kW)", value=mid["Qd3_kW"], disabled=True)
-        hand_Qd3 = st.number_input("✍️手算 Qd3(kW)", value=0.0)
+        st.number_input("软件 Qd3(kW)", value=mid["Qd3_kW"], disabled=True, format="%.4f")
+        hand_Qd3 = st.number_input("✍️手算 Qd3(kW)", value=0.0, format="%.4f")
         if hand_Qd3 > 0:
             err_Qd3 = abs(mid["Qd3_kW"] - hand_Qd3)
             rel_Qd3 = err_Qd3 / mid["Qd3_kW"] *100 if mid["Qd3_kW"] != 0 else 0.0
