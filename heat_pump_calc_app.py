@@ -2,6 +2,11 @@
 """
 老旧住宅空气源热泵协同改造计算工具【V1.34】
 UI：浅色科技风｜玻璃拟态｜清爽高亮｜大屏展示
+👉V1.38修订要点（方案B：修复"载入/删除/重置后左右页面不一致"）：
+- 根因：载入/删除/重置按钮位于侧边栏"功能页面切换"radio 之前，点击时 st.rerun() 会在 radio 实例化前中断脚本，
+  Streamlit 据此把 radio 控件状态当作过期控件清空，下次渲染回落到默认页1；前端 radio 仍显示旧选中页 → 左（导航）右（内容）不一致。
+- 修复：①保存方案快照新增"当前页面"字段；②载入方案时在脚本顶部显式写回 page_select_radio（旧方案无该字段时默认回到页面3，便于继续修改）；
+  ③删除方案时暂存并恢复当前页面；④恢复统一基准后显式回到页面1。
 ⚠️户型切换：
 ①中间层住宅：上下均为采暖住户；不计屋面、地面楼板；构件：外墙、外窗、外门、非采暖楼梯间隔墙+冷风渗透
 ②顶层边户：顶层+东西山墙边户；计入屋面、山墙；不计底层地面楼板；构件：外墙、东西山墙、屋面、外窗、外门、非采暖隔墙+冷风渗透
@@ -380,6 +385,8 @@ def _apply_reset_defaults():
         "_base_type": "未录入（暂不输出真实节能率）", "_base_energy": 0.0, "_base_ef": 0.20,
         # ---- 侧边栏 户型 / 造价模式 / 计算模式 ----
         "house_type_sel": "中间层住宅", "retrofit_mode_sel": "分户独立改造", "calc_mode_radio": "三套典型方案",
+        # V1.38：重置后回到页面1（重置按钮 rerun 会清空 radio 控件状态，显式写回避免左右不一致）
+        "page_select_radio": "1.建筑围护参数录入",
     }
     for _k, _v in _w.items():
         st.session_state[_k] = _v
@@ -387,6 +394,10 @@ def _apply_reset_defaults():
 
 if st.session_state.pop("_pending_reset", False):
     _apply_reset_defaults()
+
+# V1.38：删除方案后恢复当前页面（删除按钮 rerun 会清空 radio 控件状态，需在 radio 实例化前写回）
+if "_restore_page_after_del" in st.session_state:
+    st.session_state["page_select_radio"] = st.session_state.pop("_restore_page_after_del")
 
 # V1.35：载入方案的 pending 处理（必须在 sidebar widget 实例化之前执行，否则 house_type_sel 等不可写）
 if "_pending_load_scheme" in st.session_state:
@@ -416,6 +427,11 @@ if "_pending_load_scheme" in st.session_state:
         # V1.37：显式写回全部输入控件状态（与 _apply_reset_defaults 同一机制）。
         # 仅靠 _clear_widget_state 删除 key 后"按 value= 重建"在某些 Streamlit 版本下不可靠，
         # 会出现 build["area"]=110 但输入框仍显示 120 的不一致。此处逐个写回确保输入框与业务字典一致。
+        # V1.38：恢复保存时的页面。载入/删除/重置按钮位于"功能页面切换"radio 之前，
+        # 点击时 st.rerun() 会在 radio 实例化前中断脚本，导致 radio 控件状态被 Streamlit 清理为默认页；
+        # 因此必须在脚本顶部（radio 实例化前）显式写回 page_select_radio，否则左侧导航显示旧页、
+        # 右侧内容却渲染默认页（左右不一致）。旧方案无"当前页面"字段时默认回到页面3（结果页，便于继续修改）。
+        st.session_state["page_select_radio"] = _s.get("当前页面", "3.三套方案计算结果")
         _b = st.session_state["build"]; _e = st.session_state["equip"]; _c = st.session_state["coef_set"]
         _w = {
             # ---- 页面1 建筑围护 ----
@@ -1397,6 +1413,8 @@ with st.sidebar:
             "计算模式": st.session_state.get("calc_mode", "typical"),
             "允许外墙改造": st.session_state.get("cfg_allow_wall", True),
             "SPF口径": st.session_state.get("cfg_spf_mode", "含辅机 SPF_HP+aux"),
+            # V1.38：保存当前所在页面，载入后恢复到同一页面（避免左右页面不一致）
+            "当前页面": st.session_state.get("page_select_radio", "1.建筑围护参数录入"),
         }
         if "saved_schemes" not in st.session_state:
             st.session_state["saved_schemes"] = []
@@ -1413,6 +1431,10 @@ with st.sidebar:
                         st.rerun()
                 with _col_del:
                     if st.button("🗑", key=f"del_scheme_{_si}", help="删除此方案"):
+                        # V1.38：删除按钮在"功能页面切换"radio 之前触发 rerun，会清空 radio 控件状态；
+                        # 先暂存当前页面，rerun 后在脚本顶部恢复，避免删除后左右页面不一致
+                        st.session_state["_restore_page_after_del"] = st.session_state.get(
+                            "page_select_radio", "1.建筑围护参数录入")
                         st.session_state["saved_schemes"].pop(_si)
                         st.rerun()
     st.divider()
