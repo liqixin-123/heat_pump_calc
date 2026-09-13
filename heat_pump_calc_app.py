@@ -1,7 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-老旧住宅空气源热泵协同改造计算工具 V1.36
+暖改智选——面向郑州老旧住宅的围护—末端—空气源热泵协同改造比选平台 V1.42
 UI：浅色科技风｜玻璃拟态｜清爽高亮｜大屏展示
+👉V1.42修订要点（P0-01 / P0-05 / P0-07）：
+- P0-01 18种自由组合去重：E1/E2 不再同为"全套围护改造"，改为三个独立围护等级——
+  E0现状（不改造）、E1轻量改造（外墙保温+外窗更换）、E2综合改造（全套围护）；
+  三等级在 K值、渗透率（冷风渗透折减1.00/0.95/0.88）、造价（E0=0/E1=外墙+外窗/E2=全套）、施工条件上互不相同；
+  18行全部唯一（程序显示"唯一方案签名=18"），并新增跨门槛排序（可行组合按目标函数=年电费升序）。
+- P0-05 可见bug修复：①顶层边户方案2/3叙述区"相对方案1购电-None%"→统一"不可比（基准供热不完整）"；
+  ②应用标题区字面串 "'''+APP_VERSION+'''" → 标题只从 APP_VERSION 常量渲染；③"相对方案1减排(kg)"负号与指标语义相反
+  → 减排量显示正数（delta同步）；④新增统一 NA 类型(NotComparable)与 fmt_na/fmt_payback 格式化函数，禁止字符串拼接 None。
+- P0-07 名称/版本/数据年份统一：新增 manifest 常量表（APP_NAME/APP_TITLE/APP_VERSION/APP_UPDATE_DATE/
+  MODEL_VERSION/CALC_DATA_VERSION/GRID_EF_SOURCE），浏览器标题、页面主标题、导出文件名、验证页版本、碳因子来源（数据年度2023、
+  发布日2025-12-31、公告2025年第47号）全部引用同一常量。
+- APP-01：18组合生成后增加唯一签名断言（默认参数断言 unique_count=18，失败时报错提示检查 ENVELOPE_LEVELS）。
+- APP-02：新增统一 safe_percent_change() 相对变化计算（基准缺失/为零/非数值一律返回 None→统一NA文案），
+  节能率/减排率/批量相对购电全部经其计算，页面全文无 None/nan/inf。
+- APP-05：四态状态体系（通过✅/条件通过🟡/待核验⏳/不可行❌）——闸门状态表、独立闸门表、18组合表、房间级校核、
+  验证证据表统一同词同色；未填写/未确认/未提交一律归『待核验』，不再用红叉画成失败。
+- APP-06：结果卡片按同口径分组——①绝对值（年耗电/年碳排放，三方案横向可比）②相对方案1（购电/减排/回收期，方案1为基准）。
+- APP-07：版本四元组拆分 app_version / model_version / data_version / test_run_id，
+  三个导出文件（估算面分段能耗CSV、18组合CSV、完整计算报告CSV）全部携带四个版本字段。
+- APP-08：地暖表面温度上限校验——0=未填写→待核验；有效值须高于室温（20℃室温时不接受≤20℃上限），
+  输入范围与 _floor_surf_check 双重拦截。
 👉V1.38修订要点（方案B：修复"载入/删除/重置后左右页面不一致"）：
 - 根因：载入/删除/重置按钮位于侧边栏"功能页面切换"radio 之前，点击时 st.rerun() 会在 radio 实例化前中断脚本，
   Streamlit 据此把 radio 控件状态当作过期控件清空，下次渲染回落到默认页1；前端 radio 仍显示旧选中页 → 左（导航）右（内容）不一致。
@@ -80,10 +101,96 @@ import datetime
 import hashlib
 import json
 
-# ====================== V1.36：版本与计算快照一致性 ======================
-APP_VERSION = "V1.42"
-CALC_DATA_VERSION = "V1.35-data-20260909"
+# ====================== P0-7/APP-07：作品名称/版本/数据源统一清单（manifest 常量表） ======================
+# 唯一名称口径：浏览器标题、页面主标题、导出文件名、申报书/说明书一律引用本清单，禁止另起名。
+# APP-07：版本四元组拆分——app_version / model_version / data_version / test_run_id，导出文件全部携带。
+APP_SHORT_NAME = "暖改智选"
+APP_NAME = "暖改智选"
+APP_TITLE = "暖改智选——面向郑州老旧住宅的围护—末端—空气源热泵协同改造比选平台"
+APP_SUB_DESC = "围护改造 · 末端适配 · 空气源热泵选型 · 经济与碳排放测算｜郑州老旧住宅典型案例"
+APP_TEAM = "顺势而为队"
+APP_VERSION = "V1.42"            # 程序版本（标题/侧栏/导出统一引用）
+MODEL_VERSION = "V1.42"          # 模型版本（H→Qd→Q_year→末端反算→估算面分段积分→费用/碳排→五道闸门）
+DATA_VERSION = "20260913"        # 数据版本（估算面锚点/气象HDD/碳因子口径快照）
+TEST_RUN_ID = "TR-V1.42-20260913-001"   # 测试运行ID（每次回归测试/导出唯一）
+APP_UPDATE_DATE = "2026-09-13"
+CALC_DATA_VERSION = f"{APP_VERSION}-data-{DATA_VERSION}"  # 兼容旧引用（计算快照指纹/验证页）
+# 碳排因子数据来源（P0-7/APP-07：写明年份/发布日/公告号）
+GRID_EF_SOURCE = "2023年河南省电力平均二氧化碳排放因子（数据年度2023、发布日2025-12-31、生态环境部/国家统计局公告2025年第47号；位置法）"
 DEFAULT_SEASON_HOURS = 2880.0  # 郑州采暖期约120天×24h（一阶假设：把度时积分折算为时段时长；须以气象时序校核）
+
+# ====================== P0-5：统一"不可比"类型与格式化函数 ======================
+NA_TEXT = "不可比（基准供热不完整）"
+class NotComparable:
+    """供热不完整/基准不可比时的统一占位值（单例）。
+    禁止直接与字符串拼接——即使遗漏了显示点，__str__ 也会渲染为统一文案，
+    杜绝 'None' / 'nan' / 'inf' / 模板字符串进入界面。"""
+    _instance = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    def __repr__(self):
+        return "NA(基准供热不完整)"
+    def __str__(self):
+        return NA_TEXT
+NC = NotComparable()
+
+def fmt_na(value, fmt="{:,}", suffix="", na_text=None):
+    """统一不可比格式化（P0-5）：value 为 None/NotComparable 时输出统一文案
+    （默认『不可比（基准供热不完整）』），否则按 fmt 格式化数值并追加 suffix（如 '%'、'kgCO₂/a'）。"""
+    if value is None or isinstance(value, NotComparable):
+        return (na_text or NA_TEXT)
+    try:
+        return fmt.format(value) + suffix
+    except (TypeError, ValueError):
+        return str(value) + suffix
+
+def fmt_payback(pb):
+    """回收期统一文本：可算时输出『X.XX年』，不可算时输出统一不可比文案（P0-5）。"""
+    return (f"{pb:.2f}年" if pb is not None else NA_TEXT)
+
+def safe_percent_change(new_value, base_value, scale=100.0):
+    """APP-02：统一『相对变化百分比』计算（返回数值或 None）。
+    基准缺失/为零/非数值一律返回 None（由 fmt_na 渲染为统一NA文案），
+    从根源杜绝 nan/inf 与 "-None%" 进入界面。正负号语义由调用方标签决定。"""
+    try:
+        if new_value is None or base_value is None:
+            return None
+        b = float(base_value)
+        n = float(new_value)
+        if abs(b) < 1e-12:
+            return None
+        return (n - b) / abs(b) * scale
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+# ====================== APP-05：四态状态体系（通过/条件通过/待核验/不可行） ======================
+STAT_PASS = "通过"
+STAT_COND = "条件通过"
+STAT_PENDING = "待核验"
+STAT_FAIL = "不可行"
+STATUS_ICON = {STAT_PASS: "✅", STAT_COND: "🟡", STAT_PENDING: "⏳", STAT_FAIL: "❌"}
+
+def status_text(v):
+    """APP-05：统一状态词——卡片/表格/导出同词；布尔与旧词（OK/NG/未通过/待填写…）归一为四态。
+    未知/未确认归『待核验』（⏳），不画成失败（❌）。"""
+    if isinstance(v, bool):
+        return STAT_PASS if v else STAT_FAIL
+    s = str(v)
+    if s in ("通过", "OK", "ok", "是", "true", "True"):
+        return STAT_PASS
+    if s in ("条件通过", "条件", "部分通过", "conditional"):
+        return STAT_COND
+    if s in ("待核验", "待填写", "未填写", "未确认", "待确认", "未提交", "未开展", "pending"):
+        return STAT_PENDING
+    if s in ("不可行", "NG", "ng", "否", "false", "False", "未通过"):
+        return STAT_FAIL
+    return s
+
+def status_icon(v):
+    """APP-05：状态词 → 图标（通过✅/条件通过🟡/待核验⏳/不可行❌），未识别词返回原样。"""
+    return STATUS_ICON.get(status_text(v), str(v))
 
 ###====改造模式造价系数配置（分户独立 / 批量分户）====
 # 分户独立改造：围护/热泵/末端 有效系数均为 1.00；
@@ -230,10 +337,28 @@ EVIDENCE_LEVELS = {
 #    - 空气源热泵设备安装 0.85：厂家批量供货、统一班组安装，省去零散上门差旅成本；
 #    - 室内末端改造 0.80：批量进场、开槽回填工序统一调度。
 ENVELOPE_OPTIONS = [
-    {"id":"E0","name":"E0-不做围护改造","is_retrofit":False},
-    {"id":"E1","name":"E1-部分围护改造","is_retrofit":True},
-    {"id":"E2","name":"E2-全套围护改造","is_retrofit":True},
+    {"id":"E0","name":"E0-现状（不做围护改造）","is_retrofit":False},
+    {"id":"E1","name":"E1-轻量改造（外墙保温+外窗更换）","is_retrofit":True},
+    {"id":"E2","name":"E2-综合改造（全套围护）","is_retrofit":True},
 ]
+# ====================== P0-1：围护等级独立定义（E0现状/E1轻量/E2综合） ======================
+# 三个围护等级在 K 值、渗透率、造价、施工条件上互不相同，保证 3×3×2=18 个组合全部为唯一方案：
+# - k_items:   该等级采用"改造后K值"的构件集合（未列出的构件保留改造前K值）
+# - n_factor:  冷风渗透换气次数折减系数（围护气密性提升的一阶假设；仅用于18自由组合枚举口径）
+# - cost_items: 计入围护造价的构件集合（E0=0；E1=外墙+外窗；E2=全套）
+# - construction: 施工条件差异（申报书/说明书同步引用）
+ENVELOPE_LEVELS = {
+    "E0": {"name":"E0-现状（不做围护改造）","is_retrofit":False,
+           "k_items":[], "n_factor":1.00, "cost_items":[],
+           "construction":"无围护施工（仅更换热泵）"},
+    "E1": {"name":"E1-轻量改造（外墙保温+外窗更换）","is_retrofit":True,
+           "k_items":["wall","win"], "n_factor":0.95, "cost_items":["wall","win"],
+           "construction":"外墙保温+外窗更换（局部施工，工期较短）"},
+    "E2": {"name":"E2-综合改造（全套围护）","is_retrofit":True,
+           "k_items":["wall","win","door","nonheat","roof","gable"], "n_factor":0.88,
+           "cost_items":["wall","win","door","nonheat","roof","gable"],
+           "construction":"全套围护改造（外门/非采暖隔墙/屋面/山墙一并处理）"},
+}
 TERMINAL_OPTIONS = [
     {"id":"T0","name":"T0-原有旧散热器"},
     {"id":"T1","name":"T1-增强型散热器"},
@@ -303,7 +428,7 @@ DEFAULT_EQUIP = {
     "cost_pump":12500.0, #热泵：固定总价（台）
     "budget":30000.0,
     "elec_price":0.56,
-    "grid_ef":0.5897, # V1.34：默认改为 2023年河南省电力平均二氧化碳排放因子 0.5897 kgCO₂/kWh（生态环境部、国家统计局2025年第47号公告；位置法）
+    "grid_ef":0.5897, # P0-7：默认改为 2023年河南省电力平均二氧化碳排放因子 0.5897 kgCO₂/kWh（数据年度2023、发布日2025-12-31、生态环境部/国家统计局公告2025年第47号；位置法）
     "Qhp_rated1":12.0,
     "Qhp_rated2":12.0,
     "Qhp_rated3":10.0,
@@ -1281,7 +1406,8 @@ def calc_segment_hp_aux_2d(seg_list, hp_id, tg_solve, hp_rated_max_kW, q_aux_cap
 
 
 def calc_retrofit_cost_ex(house_type, build_dict, equip_dict, coef_envelope, coef_pump, coef_terminal):
-    """分项独立批量折算：围护×coef_envelope、热泵×coef_pump、末端×coef_terminal（V1.34：净墙扣门）"""
+    """分项独立批量折算：围护×coef_envelope、热泵×coef_pump、末端×coef_terminal（V1.34：净墙扣门）
+    P0-1：同时返回各围护分项折算金额，供围护等级 E1（仅外墙+外窗）与 E2（全套）分别汇总造价。"""
     wall_net_A = calc_wall_net(build_dict)
     cost_wall_ins = wall_net_A * equip_dict["unit_wall_ins"]
     cost_win = build_dict["win"] * equip_dict["unit_win_replace"]
@@ -1304,7 +1430,14 @@ def calc_retrofit_cost_ex(house_type, build_dict, equip_dict, coef_envelope, coe
         "cost_lowend_raw":cost_lowend_raw,
         "cost_lowend_final":cost_lowend_final,
         "cost_pump_raw":equip_dict["cost_pump"],
-        "cost_pump_final":cost_pump_final
+        "cost_pump_final":cost_pump_final,
+        # P0-1：围护分项折算金额（按围护等级 cost_items 汇总）
+        "cost_wall_final":round(cost_wall_ins * coef_envelope, 2),
+        "cost_win_final":round(cost_win * coef_envelope, 2),
+        "cost_door_final":round(cost_door * coef_envelope, 2),
+        "cost_nonheat_final":round(cost_nonheat * coef_envelope, 2),
+        "cost_roof_final":round(cost_roof_ins * coef_envelope, 2),
+        "cost_gable_final":round(cost_gable_ins * coef_envelope, 2),
     }
 
 
@@ -1314,27 +1447,19 @@ def calc_one_combination(ht, build_input, equip_input, coef_envelope, coef_pump,
                          aux_cost_per_kw=0.0, season_hours=None, aux_p_rated=None):
     """计算一个自由组合方案，返回完整结果字典（V1.35：接入备用热源配置与分维度有效性）"""
     build_loc = build_input.copy()
-    # ---- 围护K值选择 ----
-    if env_id == "E0":
-        build_loc["Kw"] = build_loc["Kw_old"]
-        build_loc["Kwin"] = build_loc["Kwin_old"]
-        build_loc["K_door"] = build_loc["K_door_old"]
-        build_loc["K_nonheat"] = build_loc["K_nonheat_old"]
-        if ht == "顶层边户":
-            build_loc["K_roof"] = build_loc["K_roof_old"]
-            build_loc["K_gable"] = build_loc["K_gable_old"]
-        env_do_retrofit = False
-    elif env_id in ("E1","E2"):
-        build_loc["Kw"] = build_loc["Kw_new"]
-        build_loc["Kwin"] = build_loc["Kwin_new"]
-        build_loc["K_door"] = build_loc["K_door_new"]
-        build_loc["K_nonheat"] = build_loc["K_nonheat_new"]
-        if ht == "顶层边户":
-            build_loc["K_roof"] = build_loc["K_roof_new"]
-            build_loc["K_gable"] = build_loc["K_gable_new"]
-        env_do_retrofit = True
-    else:
-        raise ValueError("非法env_id: "+str(env_id))
+    # ---- P0-1：围护等级独立定义（E0现状/E1轻量/E2综合；K值、渗透率、造价、施工条件均互不相同） ----
+    _env_level = ENVELOPE_LEVELS[env_id]
+    # K 值：k_items 内的构件采用改造后K，其余保留改造前K
+    build_loc["Kw"]         = build_loc["Kw_new"]         if "wall"     in _env_level["k_items"] else build_loc["Kw_old"]
+    build_loc["Kwin"]       = build_loc["Kwin_new"]       if "win"      in _env_level["k_items"] else build_loc["Kwin_old"]
+    build_loc["K_door"]     = build_loc["K_door_new"]     if "door"     in _env_level["k_items"] else build_loc["K_door_old"]
+    build_loc["K_nonheat"]  = build_loc["K_nonheat_new"]  if "nonheat"  in _env_level["k_items"] else build_loc["K_nonheat_old"]
+    if ht == "顶层边户":
+        build_loc["K_roof"]  = build_loc["K_roof_new"]  if "roof"  in _env_level["k_items"] else build_loc["K_roof_old"]
+        build_loc["K_gable"] = build_loc["K_gable_new"] if "gable" in _env_level["k_items"] else build_loc["K_gable_old"]
+    # 渗透率：围护等级气密性折减（一阶假设；18自由组合枚举口径，三套典型方案不适用）
+    build_loc["n"] = round(build_input["n"] * _env_level["n_factor"], 4)
+    env_do_retrofit = _env_level["is_retrofit"]
     # ---- 末端参数选择 ----
     if term_id == "T0":
         qr = equip_input["rad_Qrated_kW"]; dtmr = equip_input["rad_dt_m_rated"]; m_val = equip_input["rad_m"]
@@ -1375,7 +1500,10 @@ def calc_one_combination(ht, build_input, equip_input, coef_envelope, coef_pump,
     # ---- 分项独立造价 ----
     cost_ex = calc_retrofit_cost_ex(ht, build_loc, equip_input, coef_envelope, coef_pump, coef_terminal)
     invest_pump = cost_ex["cost_pump_final"]
-    invest_env = cost_ex["sum_envelope_final"] if env_do_retrofit else 0.0
+    # P0-1：围护造价按围护等级的成本项集合汇总（E0=0；E1=外墙+外窗；E2=全套）
+    _env_cost_map = {"wall":"cost_wall_final","win":"cost_win_final","door":"cost_door_final",
+                     "nonheat":"cost_nonheat_final","roof":"cost_roof_final","gable":"cost_gable_final"}
+    invest_env = round(sum(cost_ex[_env_cost_map[k]] for k in _env_level["cost_items"]), 2) if env_do_retrofit else 0.0
     invest_terminal = cost_ex["cost_lowend_final"] if term_is_lowend else 0.0
     # V1.35：备用热源投资（已安装容量×单位造价）联动进入总投资约束
     aux_invest = aux_installed_kw * aux_cost_per_kw
@@ -1384,6 +1512,7 @@ def calc_one_combination(ht, build_input, equip_input, coef_envelope, coef_pump,
     co2_run_kg = round(e_total_elec * equip_input["grid_ef"], 2)
     return {
         "env_id":env_id,"term_id":term_id,"hp_id":hp_id,
+        "env_name":_env_level["name"],"env_construction":_env_level["construction"],
         "H_kWK":round(H_kWK,4),"Qd_kW":round(Qd_kW,2),
         "q_load_per_area_Wm2":round(Qd_kW/build_loc["area"]*1000,2),
         "tg_solve":tg_solve,"th_solve":th_solve,
@@ -1418,7 +1547,7 @@ def payback_period_incremental(base_invest, add_invest, base_year_elec, new_year
 
 # ======================全局页面基础配置 + 浅色科技CSS ======================
 st.set_page_config(
-    page_title=f"郑州老旧住宅热泵协同改造方案比选与风险筛查工具 {APP_VERSION}",
+    page_title=f"{APP_TITLE} {APP_VERSION}",
     page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1500,11 +1629,11 @@ header[data-testid="stHeader"]{
 </style>
 """
 st.markdown(light_tech_style, unsafe_allow_html=True)
-st.markdown("""
+st.markdown(f"""
 <div class="hero-banner">
-    <div class="hero-main">郑州老旧住宅热泵协同改造方案比选与风险筛查工具</div>
-    <div class="hero-sub">围护改造 · 末端适配 · 空气源热泵选型 · 经济与碳排放测算｜郑州老旧住宅典型案例</div>
-    <div class="hero-meta">作品：老旧住宅空气源热泵协同改造测算系统｜团队：顺势而为队｜版本：''' + APP_VERSION + '''｜更新时间：2026-09-09</div>
+    <div class="hero-main">{APP_TITLE}</div>
+    <div class="hero-sub">{APP_SUB_DESC}</div>
+    <div class="hero-meta">作品：{APP_TITLE}｜团队：{APP_TEAM}｜版本：{APP_VERSION}｜更新时间：{APP_UPDATE_DATE}</div>
     <div class="hero-route">定位：早期方案比较与教学决策支持，不替代暖通设计、设备选型和施工图审查｜技术路线：有限方案枚举 → 建筑热损失 → 设计负荷 → 末端供水温度 → 热泵性能估算面 → 全年分段能耗 → 费用与运行阶段购电间接排放 → 五道闸门（预算/工程/容量+备用/末端/模型适用性） → 可行方案排序</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1562,7 +1691,7 @@ with st.expander("📌 参数来源台账（答辩追溯·可折叠）", expande
     _r("地暖末端单位造价","{:.0f}".format(_e["unit_lowend_floor"]),"元/m²","郑州2026-08询价含税含回填含找平","2026","-","郑州地区","假")
     _r("热泵采购安装总价","{:.0f}".format(_e["cost_pump"]),"元/台","郑州2026-08经销商报价·含税含运输含安装含基础","2026","-","郑州地区","假")
     _r("居民电价","{:.2f}".format(_e["elec_price"]),"元/kWh","河南省居民阶梯电价(现行)","2023","豫发改价管〔2023〕号","居民采暖","源")
-    _r("电力二氧化碳排放因子","{:.4f}".format(_e["grid_ef"]),"kgCO₂/kWh","2023年河南省电力平均二氧化碳排放因子(生态环境部、国家统计局2025年第47号公告)","2023","公告","运行阶段购电间接排放(位置法)","源")
+    _r("电力二氧化碳排放因子","{:.4f}".format(_e["grid_ef"]),"kgCO₂/kWh","2023年河南省电力平均二氧化碳排放因子(数据年度2023、发布日2025-12-31、生态环境部/国家统计局公告2025年第47号)","2023","公告","运行阶段购电间接排放(位置法)","源")
     # ---- 批量折算系数（调研依据） ----
     _r("围护有效系数","{:.2f}".format(1.00 if st.session_state["retrofit_mode"]=="分户独立改造" else _c["coef_envelope"]),"-","分户=1.00；批量=行业调研经验·EPC集采/外脚手架共用/人工摊薄(页面2可改)","2026","-","按当前造价模式","假")
     _r("热泵有效系数","{:.2f}".format(1.00 if st.session_state["retrofit_mode"]=="分户独立改造" else _c["coef_pump"]),"-","分户=1.00；批量=行业调研经验·厂家批量供货/统一班组安装省差旅(页面2可改)","2026","-","按当前造价模式","假")
@@ -1644,7 +1773,7 @@ with st.sidebar:
 
     # ===== 模型版本号 + 恢复统一基准 =====
     st.markdown("**🛠 模型版本号：" + APP_VERSION + "**")
-    st.caption("更新时间：2026-09-09（计算快照指纹 / 度时-时长分离 / 有效性分维度 / 备用热源配置 / 供热完整性 / 房间级与工程条件核验）\n计算链：H → Q_design → Q_year → 末端反算tg → 估算面COP插值 → E_HP+E_aux → SPF_HP+aux → 费用 → 运行期碳排放 → 五道闸门+备用/电力/供热完整性")
+    st.caption(f"更新时间：{APP_UPDATE_DATE}（计算快照指纹 / 度时-时长分离 / 有效性分维度 / 备用热源配置 / 供热完整性 / 房间级与工程条件核验 / 围护等级独立定义 / 统一不可比口径 / 名称版本统一）\n计算链：H → Q_design → Q_year → 末端反算tg → 估算面COP插值 → E_HP+E_aux → SPF_HP+aux → 费用 → 运行期碳排放 → 五道闸门+备用/电力/供热完整性")
     if st.button("♻️恢复统一基准（重置全部默认参数）", width="stretch"):
         reset_to_defaults()
     if st.session_state.pop("_reset_toast", False):
@@ -1730,7 +1859,7 @@ with st.sidebar:
         4. 热泵样本：美的MHSR-N8-S1系列 MHSR120N8-S1(12kW)、MHSR100N8-S1(10kW)·执行 GB/T 25127.2-2020·官方手册最高出水温度60℃·A7/W45 COP=3.50/3.55、A-12/W35=2.70·2026美的MHSR-N8-S1系列产品说明书·源
         5. 热负荷：不计朝向/风力/高度附加；热桥与间歇修正未纳入——定位“早期方案比较/教学决策支持”
         6. ⚠️本程序**不适用底层住户**
-        7. V1.34：性能估算面插值(模型适用范围内)；HDD多温度分段计算全年能耗；SPF_HP+aux=Q_year/(E_HP+E_aux)；旧SPF仅作参考
+        7. 性能估算面插值(模型适用范围内)；HDD多温度分段计算全年能耗；SPF_HP+aux=Q_year/(E_HP+E_aux)；旧SPF仅作参考
         """)
     st.divider()
     page_select = st.radio("功能页面切换", [
@@ -1920,7 +2049,7 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
         st.number_input("业主改造费用预算 元",value=equip["budget"],min_value=0.0,max_value=1000000.0,key="_budget",on_change=sync_equip,args=("_budget", "budget"))
         st.number_input("居民电价 元/kWh",value=equip["elec_price"],min_value=0.3,max_value=2.0,key="_elec_price",on_change=sync_equip,args=("_elec_price", "elec_price"))
         st.number_input("电力二氧化碳排放因子 kgCO₂/kWh",value=equip["grid_ef"],min_value=0.0,max_value=2.0,step=0.0001,format="%.4f",key="_grid_ef",on_change=sync_equip,args=("_grid_ef", "grid_ef"))
-        st.caption("默认0.5897=2023年河南省电力平均二氧化碳排放因子（生态环境部、国家统计局2025年第47号公告）；计算边界：运行阶段购电间接排放（位置法）。若改用0.5810须给出准确文件名/年份与适用理由。")
+        st.caption(f"默认0.5897=2023年河南省电力平均二氧化碳排放因子（数据年度2023、发布日2025-12-31、生态环境部/国家统计局公告2025年第47号，位置法）；计算边界：运行阶段购电间接排放。若改用0.5810须给出准确文件名/年份与适用理由。")
     st.divider()
     col_t1, col_t2 = st.columns(2)
     with col_t1:
@@ -1945,7 +2074,8 @@ elif page_select == "2.热泵&末端热工&单位造价录入":
         st.markdown("**🛏 房间级校核输入（地暖须核查有效面积与表面温度；0=未填写→待核验）**")
         st.number_input("该房间地暖额定散热量 kW（方案3）", min_value=0.0, max_value=20.0, step=0.1, key="_room_floor_kw")
         st.number_input("地暖有效散热面积 m²（方案3）", min_value=0.0, max_value=300.0, step=1.0, key="_floor_eff_area")
-        st.number_input("地暖表面温度上限 ℃（人员经常停留区，JGJ 142 参考 24~28）", min_value=20.0, max_value=40.0, step=0.5, key="_floor_surf_max")
+        st.number_input("地暖表面温度上限 ℃（人员经常停留区，JGJ 142 参考 24~28；0=未填写→待核验）", min_value=0.0, max_value=45.0, step=0.5, key="_floor_surf_max",
+                        help="APP-08：0/空值代表未填写；有效值须高于室内设计温度（如室温20℃时上限须>20℃，否则无物理意义并触发校验拦截）。")
 
     # ========= V1.7新增：热泵厂家样本表展示（V1.21补充二维性能表） =========
     st.divider()
@@ -2036,7 +2166,7 @@ elif page_select == "3.三套方案计算结果":
     real_cost_pump = equip["cost_pump"] * eff_coef_pump # V1.34：热泵×有效系数
     real_envelope = cost_dict["sum_envelope_raw"] * eff_coef_env
     real_lowend = cost_dict["cost_lowend_raw"] * eff_coef_term
-    with st.expander("🔍展开查看围护工程量 & 分项造价明细（每项=原始金额×有效系数=折算金额，V1.34）"):
+    with st.expander("🔍展开查看围护工程量 & 分项造价明细（每项=原始金额×有效系数=折算金额）"):
         _cur_mode_txt = st.session_state["retrofit_mode"]
         df_cost_detail = pd.DataFrame([
             {"分项":"外墙保温","工程量m²":round(cost_dict["wall_net_A"],2),"单位造价元/m²":equip["unit_wall_ins"],
@@ -2133,7 +2263,8 @@ elif page_select == "3.三套方案计算结果":
             st.number_input("房间地暖额定散热量 kW（方案3）", min_value=0.0, max_value=20.0, step=0.1, key="_room_floor_kw")
         with _rc3:
             st.number_input("地暖有效散热面积 m²（方案3）", min_value=0.0, max_value=300.0, step=1.0, key="_floor_eff_area")
-            st.number_input("地暖表面温度上限 ℃", min_value=20.0, max_value=40.0, step=0.5, key="_floor_surf_max")
+            st.number_input("地暖表面温度上限 ℃（0=未填写→待核验）", min_value=0.0, max_value=45.0, step=0.5, key="_floor_surf_max",
+                            help="APP-08：0=未填→待核验；有效值须高于室内设计温度（室温20℃时须>20℃，≤室温的上限无物理意义）。")
         _room_load_kw_v = float(st.session_state.get("_room_load_kw", 0.0))
         _room_rad_kw_v = float(st.session_state.get("_room_rad_kw", 0.0))
         _room_floor_kw_v = float(st.session_state.get("_room_floor_kw", 0.0))
@@ -2149,21 +2280,26 @@ elif page_select == "3.三套方案计算结果":
             return "待核验", f"{label}：未填写房间负荷或房间末端额定散热量（页面2）"
         dt_m = tg_solve_v - dtfr/2.0 - Tin_v
         if dt_m <= 0:
-            return "未通过", f"{label}：供水温度{tg_solve_v:.1f}℃过低，房间末端无散热能力"
+            return "不可行", f"{label}：供水温度{tg_solve_v:.1f}℃过低，房间末端无散热能力"
         q_avail = qr_room * pow(dt_m/dtmr, m_val)
         if q_avail >= q_load_room - 1e-4:
             return "通过", ""
-        return "未通过", f"{label}：房间末端在{round(tg_solve_v,1)}℃下可散热{round(q_avail,2)}kW < 房间负荷{round(q_load_room,2)}kW"
+        return "不可行", f"{label}：房间末端在{round(tg_solve_v,1)}℃下可散热{round(q_avail,2)}kW < 房间负荷{round(q_load_room,2)}kW"
 
     def _floor_surf_check(Qd_kw, A_eff, Tin_v, surf_max):
-        """地暖表面温度估算校核：t_f ≈ Tin + q/α，α≈8 W/(m²·K)（工程近似，标记假，须实测校核；审查意见⑦）"""
+        """地暖表面温度估算校核：t_f ≈ Tin + q/α，α≈8 W/(m²·K)（工程近似，标记假，须实测校核；审查意见⑦）
+        APP-08：0=未填写→待核验；上限≤室温→不可行（参数矛盾），不把未知画成失败。"""
+        if surf_max <= 0:
+            return "待核验", "地暖表面温度上限未填写（0=未填→待核验，页面2）"
+        if surf_max <= Tin_v:
+            return "不可行", f"地暖表面温度上限{round(surf_max,1)}℃须高于室温{Tin_v:.1f}℃（≤室温的上限无物理意义；20℃室温时不接受≤20℃），请修正输入"
         if A_eff <= 0:
             return "待核验", "地暖有效散热面积未填写（页面2）"
         q_flux = Qd_kw * 1000.0 / A_eff
         t_surf = Tin_v + q_flux / 8.0
         if t_surf <= surf_max + 1e-6:
             return "通过", ""
-        return "未通过", f"地暖表面温度估算 {round(t_surf,1)}℃（负荷密度{round(q_flux,0)}W/m²，α≈8 W/(m²·K)）> 上限{round(surf_max,1)}℃，需增大有效面积或降低负荷"
+        return "不可行", f"地暖表面温度估算 {round(t_surf,1)}℃（负荷密度{round(q_flux,0)}W/m²，α≈8 W/(m²·K)）> 上限{round(surf_max,1)}℃，需增大有效面积或降低负荷"
 
     def _eng_ok(need_facade, need_piping):
         """工程安装条件：外立面许可 + 外机位置 + 电力容量 + 排水防冻（+ 管路水力，方案3）。
@@ -2260,11 +2396,11 @@ elif page_select == "3.三套方案计算结果":
     save_elec_2 = elec_1 - elec_2
     payback_2 = payback_period(real_envelope, save_elec_2, equip["elec_price"])
     load_save_rate_2 = round((Qd1_kW - Qd2_kW)/Qd1_kW*100,2)
-    elec_save_rate_2 = round((elec_1 - elec_2)/elec_1*100,2) # 相对方案1购电变化（P0-5口径）
+    elec_save_rate_2 = round(-safe_percent_change(elec_2, elec_1), 2) if elec_1 > 1e-9 else None  # 相对方案1购电变化（APP-02：统一safe_percent_change口径）
     need_aux2, aux_load2 = check_aux_electric_heat(Qd2_kW, equip["Qhp_rated2"])
     co2_2 = calc_carbon(elec_2, equip["grid_ef"])
     co2_reduce_2 = round(co2_1 - co2_2,2)
-    co2_reduce_rate_2 = round((co2_1 - co2_2)/co2_1*100,2) if co2_1>0 else 0
+    co2_reduce_rate_2 = round(-safe_percent_change(co2_2, co2_1), 2) if co2_1 > 1e-9 else 0
     q_load_per_area2 = round(Qd2_kW / build["area"] *1000,2)
 
     # --------方案3：围护改造+更换地暖末端（V1.21：二维表分段能耗积分） --------
@@ -2298,11 +2434,11 @@ elif page_select == "3.三套方案计算结果":
     save_elec_3 = elec_1 - elec_3
     payback_3 = payback_period((real_envelope + real_lowend), save_elec_3, equip["elec_price"])
     load_save_rate_3 = round((Qd1_kW - Qd3_kW)/Qd1_kW*100,2)
-    elec_save_rate_3 = round((elec_1 - elec_3)/elec_1*100,2)
+    elec_save_rate_3 = round(-safe_percent_change(elec_3, elec_1), 2) if elec_1 > 1e-9 else None  # 相对方案1购电变化（APP-02口径）
     need_aux3, aux_load3 = check_aux_electric_heat(Qd3_kW, equip["Qhp_rated3"])
     co2_3 = calc_carbon(elec_3, equip["grid_ef"])
     co2_reduce_3 = round(co2_1 - co2_3,2)
-    co2_reduce_rate_3 = round((co2_1 - co2_3)/co2_1*100,2) if co2_1>0 else 0
+    co2_reduce_rate_3 = round(-safe_percent_change(co2_3, co2_1), 2) if co2_1 > 1e-9 else 0
     q_load_per_area3 = round(Qd3_kW / build["area"] *1000,2)
 
     # ===== V1.35：审查意见⑤ 供热完整性——相对方案1的节能/减排比较必须"等供热" =====
@@ -2364,8 +2500,8 @@ elif page_select == "3.三套方案计算结果":
     _rs3a, _rn3a = _room_check(_room_floor_kw_v, equip["floor_dt_m_rated"], equip["floor_m"], equip["floor_dt_flow_return"],
                                tg3, build["Tin"], _room_load_kw_v, "方案3房间")
     _rs3b, _rn3b = _floor_surf_check(Qd3_kW, _floor_eff_area_v, build["Tin"], _floor_surf_max_v)
-    if _rs3a == "未通过" or _rs3b == "未通过":
-        _room_status3, _room_note3 = "未通过", ("；".join(x for x in [_rn3a, _rn3b] if x) or "房间级校核未通过")
+    if _rs3a == "不可行" or _rs3b == "不可行":
+        _room_status3, _room_note3 = "不可行", ("；".join(x for x in [_rn3a, _rn3b] if x) or "房间级校核未通过")
     elif _rs3a == "待核验" or _rs3b == "待核验":
         _room_status3, _room_note3 = "待核验", ("；".join(x for x in [_rn3a, _rn3b] if x) or "房间级校核待填写")
     else:
@@ -2393,7 +2529,10 @@ elif page_select == "3.三套方案计算结果":
          "模型适用性":stat3["model_ok"],"备用电力容量":stat3["aux_elec_ok"],"供热完整性":stat3["heat_ok"],
          "房间级校核":stat3["room_status"],"整体可行":stat3["eligible"]},
     ])
-    st.subheader("🔍可行性闸门状态表（预算/工程安装条件/设计工况容量/末端能力/模型适用性/备用电力/供热完整性/房间级校核；未确认项显示待核验）")
+    # APP-05：闸门布尔统一为四态词（卡片/表格/导出同词同色：通过/条件通过/待核验/不可行）
+    for _scol in ["预算满足","设计工况容量(MR≥1)","末端能力满足","模型适用性","备用电力容量","供热完整性","整体可行"]:
+        status_df[_scol] = status_df[_scol].map(status_text)
+    st.subheader("🔍可行性闸门状态表（预算/工程安装条件/设计工况容量/末端能力/模型适用性/备用电力/供热完整性/房间级校核；四态：通过✅/条件通过🟡/待核验⏳/不可行❌；未确认项显示待核验）")
     st.dataframe(status_df, width="stretch")
 
     # ===== 独立可行性闸门（热泵按设计工况可用制热量校核 + 备用配置 + 有效性分维度 + 供热完整性 + 工程条件 + 房间级） =====
@@ -2450,19 +2589,23 @@ elif page_select == "3.三套方案计算结果":
                                "整体可行":b_ok and e_ok and h_ok and t_ok and d_ok and el_ok and ht_ok and room_ok})
             _rs = []
             if not b_ok: _rs.append("❌超出预算")
-            if not e_ok: _rs.append("❌工程条件待核验：" + _eng_note_list[_i])
+            if not e_ok: _rs.append("⏳工程条件待核验：" + _eng_note_list[_i])
             if not h_ok: _rs.append(f"❌设计工况容量不足(MR={mr_v})，需配置备用热源容量≥{q_aux_d}kW（当前有效备用{_qaux_eff_list[_i]}kW）")
             if _room_st_list[_i] == "待核验":
-                _rs.append("❌房间级校核待核验（" + (_room_note_list[_i] or "未填写房间负荷或房间末端额定散热量") + "）")
-            elif _room_st_list[_i] == "未通过":
-                _rs.append("❌房间级校核未通过（" + _room_note_list[_i] + "）")
+                _rs.append("⏳房间级校核待核验（" + (_room_note_list[_i] or "未填写房间负荷或房间末端额定散热量") + "）")
+            elif _room_st_list[_i] == "不可行":
+                _rs.append("❌房间级校核不可行（" + _room_note_list[_i] + "）")
             if not t_ok: _rs.append("❌末端能力不足")
             if not d_ok:
                 _rs.append("❌模型适用性不满足：" + (_v["reason"] if _v["reason"] else "工况越出性能估算面范围") + "（域外仅教学估计，退出正式排序）")
             if not el_ok: _rs.append(f"❌备用热源电力容量不足：已安装{_aux_installed}kW > 配电可增容上限{_aux_elec_limit_v}kW")
             if not ht_ok: _rs.append("❌供热完整性不足（末端能力不足或存在未满足热量）；相对本方案的节能比较不可比")
             _gate_reasons.append("；".join(_rs) if _rs else "✅全部条件通过，方案可行")
-        st.dataframe(pd.DataFrame(_rows_gate), width="stretch", hide_index=True)
+        _rows_gate_df = pd.DataFrame(_rows_gate)
+        # APP-05：独立闸门布尔列统一为四态词（卡片/表格/导出同词同色）
+        for _gcol in ["预算满足","热泵容量满足","末端满足","备用电力容量","供热完整性","整体可行"]:
+            _rows_gate_df[_gcol] = _rows_gate_df[_gcol].map(status_text)
+        st.dataframe(_rows_gate_df, width="stretch", hide_index=True)
         for _nm, _rsn in zip(["方案1", "方案2", "方案3"], _gate_reasons):
             st.markdown(f"**{_nm}**：{_rsn}")
         if _incmp_reason:
@@ -2472,11 +2615,11 @@ elif page_select == "3.三套方案计算结果":
     def gen_status_text(st):
         msg_list=[]
         if not st["budget_ok"]: msg_list.append("❌超出预算")
-        if not st["engineering_ok"]: msg_list.append("❌" + st.get("engineering_note", "工程条件待核验"))
+        if not st["engineering_ok"]: msg_list.append("⏳" + st.get("engineering_note", "工程条件待核验"))
         if st.get("room_status", "待核验") == "待核验":
-            msg_list.append("❌房间级校核待核验（" + (st.get("room_note", "") or "未填写房间负荷或房间末端额定散热量") + "）")
-        elif st.get("room_status", "待核验") == "未通过":
-            msg_list.append("❌房间级校核未通过（" + st.get("room_note", "") + "）")
+            msg_list.append("⏳房间级校核待核验（" + (st.get("room_note", "") or "未填写房间负荷或房间末端额定散热量") + "）")
+        elif st.get("room_status", "待核验") == "不可行":
+            msg_list.append("❌房间级校核不可行（" + st.get("room_note", "") + "）")
         if not st["hp_cap_ok"]:
             qhp = st.get("qhp_avail_design", 0)
             qd = st.get("q_load", 0)
@@ -2577,7 +2720,7 @@ elif page_select == "3.三套方案计算结果":
     if not end_ok3:
         st.warning("⚠️【方案3末端能力不足改进建议】"+" ".join(advice3))
 
-    with st.expander("🔍查看：室外温度分段插值能耗明细（V1.34估算面）+ 度时守恒校核（V1.35：度时/时长严格分离）"):
+    with st.expander("🔍查看：室外温度分段插值能耗明细 + 度时守恒校核（度时/时长严格分离）"):
         # 各温区度时之和 = HDD18×24（允许偏差≤0.5%）；度时(℃·h) ≠ 时长(h)
         _sum_deg = sum(s.get("degree_hours_seg", s.get("hdd_segment", 0.0) * 24.0) for s in seg1_full)
         _hdd_deg = build["HDD"] * 24.0
@@ -2683,7 +2826,7 @@ elif page_select == "3.三套方案计算结果":
         st.warning("⚠️ 当前选了「仅热泵主机」口径，但本方案实际有辅助电加热运行（E_aux>0）。"
                    "该口径仅反映热泵主机效率，系统级年耗电与SPF应使用「含辅助电加热」口径；两口径分子同为 Q_delivered，分母不同，不可混用。")
     col_a,col_b,col_c = st.columns(3)
-    CARD_FIX_HEIGHT=850
+    CARD_FIX_HEIGHT=1000
     with col_a:
         with st.container(height=CARD_FIX_HEIGHT):
             st.markdown("### 🟦方案1｜仅更换热泵（基准对照）")
@@ -2694,10 +2837,15 @@ elif page_select == "3.三套方案计算结果":
             st.metric("容量裕量MR",mr1)
             st.metric("热泵可用制热量(kW)",qhp_d1)
             st.metric("设计热负荷(kW)",round(Qd1_kW,2))
+            st.markdown("**① 绝对值（三方案同口径，可横向比较）**")
             st.metric("年耗电(kWh)",f"{elec_1:,.0f}",delta=f"E_aux={e_aux1:.0f}")
+            st.metric("年碳排放(kgCO₂)",f"{co2_1:,.0f}")
             st.metric("需备用容量/已配置有效(kW)",f"{q_aux_design1:.2f} / {q_aux_eff1:.2f}")
             st.metric("未满足热量(kWh)",f"{unserved1:.1f}")
-            st.metric("年碳排放(kgCO₂)",f"{co2_1:,.0f}")
+            st.markdown("**② 相对方案1（本行为基准）**")
+            st.metric("相对方案1购电","基准")
+            st.metric("相对方案1减排(kg)","基准")
+            st.metric("相对方案1回收期","基准")
             st.metric("总初投资(元)",f"{int(round(invest_1,0)):,}")
     with col_b:
         with st.container(height=CARD_FIX_HEIGHT):
@@ -2710,10 +2858,15 @@ elif page_select == "3.三套方案计算结果":
             st.metric("容量裕量MR",mr2)
             st.metric("热泵可用制热量(kW)",qhp_d2)
             st.metric("设计热负荷(kW)",round(Qd2_kW,2))
-            st.metric("相对方案1购电",(f"-{elec_save_rate_2}%" if elec_save_rate_2 is not None else "不可比"),delta=f"E_aux={e_aux2:.0f}")
+            st.markdown("**① 绝对值（三方案同口径，可横向比较）**")
+            st.metric("年耗电(kWh)",f"{elec_2:,.0f}",delta=f"E_aux={e_aux2:.0f}")
+            st.metric("年碳排放(kgCO₂)",f"{co2_2:,.0f}")
             st.metric("需备用容量/已配置有效(kW)",f"{q_aux_design2:.2f} / {q_aux_eff2:.2f}")
             st.metric("未满足热量(kWh)",f"{unserved2:.1f}")
-            st.metric("相对方案1减排(kg)",(f"-{co2_reduce_2:,.0f}" if co2_reduce_2 is not None else "不可比"),delta=(f"-{co2_reduce_rate_2}%" if co2_reduce_rate_2 is not None else "不可比"))
+            st.markdown("**② 相对方案1（等供热可比时有效）**")
+            st.metric("相对方案1购电",fmt_na(elec_save_rate_2, fmt="-{:.2f}%"))
+            st.metric("相对方案1减排(kg)",fmt_na(co2_reduce_2, fmt="{:,.0f}"),delta=fmt_na(co2_reduce_rate_2, fmt="{:.2f}%"))
+            st.metric("相对方案1回收期",fmt_payback(payback_2))
             st.metric("总初投资(元)",f"{int(round(invest_2,0)):,}")
     with col_c:
         with st.container(height=CARD_FIX_HEIGHT):
@@ -2726,14 +2879,20 @@ elif page_select == "3.三套方案计算结果":
             st.metric("容量裕量MR",mr3)
             st.metric("热泵可用制热量(kW)",qhp_d3)
             st.metric("设计热负荷(kW)",round(Qd3_kW,2))
-            st.metric("相对方案1购电",(f"-{elec_save_rate_3}%" if elec_save_rate_3 is not None else "不可比"),delta=f"E_aux={e_aux3:.0f}")
+            st.markdown("**① 绝对值（三方案同口径，可横向比较）**")
+            st.metric("年耗电(kWh)",f"{elec_3:,.0f}",delta=f"E_aux={e_aux3:.0f}")
+            st.metric("年碳排放(kgCO₂)",f"{co2_3:,.0f}")
             st.metric("需备用容量/已配置有效(kW)",f"{q_aux_design3:.2f} / {q_aux_eff3:.2f}")
             st.metric("未满足热量(kWh)",f"{unserved3:.1f}")
-            st.metric("相对方案1减排(kg)",(f"-{co2_reduce_3:,.0f}" if co2_reduce_3 is not None else "不可比"),delta=(f"-{co2_reduce_rate_3}%" if co2_reduce_rate_3 is not None else "不可比"))
+            st.markdown("**② 相对方案1（等供热可比时有效）**")
+            st.metric("相对方案1购电",fmt_na(elec_save_rate_3, fmt="-{:.2f}%"))
+            st.metric("相对方案1减排(kg)",fmt_na(co2_reduce_3, fmt="{:,.0f}"),delta=fmt_na(co2_reduce_rate_3, fmt="{:.2f}%"))
+            st.metric("相对方案1回收期",fmt_payback(payback_3))
             st.metric("总初投资(元)",f"{int(round(invest_3,0)):,}")
-    st.caption("卡片仅展示关键结论指标；全部中间量（H、Qd、单位面积热负荷、铭牌SCOP、旧算法SPF、回水温度、末端散热量、分段能耗、备用热源等）见下方『三方案对比总表』及各可折叠明细。"
+    st.caption("卡片分两组同口径指标：①**绝对值**（年耗电/年碳排放，三方案同口径可横向比较）；②**相对方案1**（购电/减排/回收期，方案1为基准）。"
+               "全部中间量（H、Qd、单位面积热负荷、铭牌SCOP、旧算法SPF、回水温度、末端散热量、分段能耗、备用热源等）见下方『三方案对比总表』及各可折叠明细。"
                "方案2/3的购电/排放变化均为“相对方案1（热泵供暖情景）”且要求**等供热**（供热完整性成立）才可比；"
-               "供热不足时标'不可比'，不代表相对住户原有供暖方式的真实节能率/减排量，真实基准见下方『改造前实际系统基准』模块。")
+               "供热不足时标'不可比（基准供热不完整）'，不代表相对住户原有供暖方式的真实节能率/减排量，真实基准见下方『改造前实际系统基准』模块。")
     st.divider()
     # 统一SPF列名（对比表与图表共用，避免KeyError）
     spf_col_name = "SPF主指标(" + ("含辅助电加热" if spf_include_aux else "仅热泵主机") + ")"
@@ -2780,13 +2939,20 @@ elif page_select == "3.三套方案计算结果":
         "相对方案1增量静态回收期(年)":[None,payback_2,payback_3]
     })
     result_df = result_df.replace({np.nan: None})  # 避免 NaN 混入文本列
-    result_df["相对方案1购电变化(%)"] = result_df["相对方案1购电变化(%)"].apply(lambda v: v if v is not None else "不可比")
-    result_df["相对方案1排放变化(kgCO₂/a)"] = result_df["相对方案1排放变化(kgCO₂/a)"].apply(lambda v: v if v is not None else "不可比")
-    result_df["相对方案1排放变化率(%)"] = result_df["相对方案1排放变化率(%)"].apply(lambda v: v if v is not None else "不可比")
+    result_df["相对方案1购电变化(%)"] = result_df["相对方案1购电变化(%)"].apply(lambda v: v if v is not None else NA_TEXT)
+    result_df["相对方案1排放变化(kgCO₂/a)"] = result_df["相对方案1排放变化(kgCO₂/a)"].apply(lambda v: v if v is not None else NA_TEXT)
+    result_df["相对方案1排放变化率(%)"] = result_df["相对方案1排放变化率(%)"].apply(lambda v: v if v is not None else NA_TEXT)
     st.dataframe(result_df, width="stretch")
-    st.caption("本表节能/减排列均为“相对方案1（热泵供暖情景）”口径且要求**等供热**（供热完整性成立，否则标'不可比'）；非相对住户原有供暖方式的真实节能率；碳排放为【运行期电力间接碳排放】（电耗×电网排放因子，位置法，单位kgCO₂/a），不包含围护材料、设备制造/更换的隐含碳；回收期为【相对方案1增量静态回收期】，非项目真实全生命周期回收期。")
-    csv_bytes = result_df.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button("📥下载CSV结果",csv_bytes,file_name=f"{ht}_热泵改造{APP_VERSION}_估算面分段能耗.csv",mime="text/csv")
+    st.caption("本表节能/减排列均为“相对方案1（热泵供暖情景）”口径且要求**等供热**（供热完整性成立，否则标'不可比（基准供热不完整）'）；非相对住户原有供暖方式的真实节能率；碳排放为【运行期电力间接碳排放】（电耗×电网排放因子，位置法，单位kgCO₂/a），不包含围护材料、设备制造/更换的隐含碳；回收期为【相对方案1增量静态回收期】，非项目真实全生命周期回收期。")
+    _ver_head_csv = "\n".join([
+        "版本信息:app_version," + APP_VERSION,
+        "版本信息:model_version," + MODEL_VERSION,
+        "版本信息:data_version," + DATA_VERSION,
+        "版本信息:test_run_id," + TEST_RUN_ID,
+        "",
+    ])
+    csv_bytes = (_ver_head_csv + result_df.to_csv(index=False,encoding="utf-8-sig")).encode("utf-8-sig")
+    st.download_button("📥下载CSV结果",csv_bytes,file_name=f"{APP_SHORT_NAME}_{ht}_{APP_VERSION}_估算面分段能耗.csv",mime="text/csv")
 
     # ===== 推荐状态机（先于导出计算；分别列工程条件与房间级，不混说"待核验"）=====
     _any_retrofit_ok = (stat2["eligible"] or stat3["eligible"])
@@ -2798,9 +2964,9 @@ elif page_select == "3.三套方案计算结果":
     if not eng3_ok: _eng_pending.append("方案3：" + eng3_note)
     _room_pending = [_nm for _nm, _s in [("方案1", _room_status1), ("方案2", _room_status2), ("方案3", _room_status3)] if _s == "待核验"]
     _room_fail = []
-    if _room_status1 == "未通过": _room_fail.append("方案1：" + (_room_note1 or ""))
-    if _room_status2 == "未通过": _room_fail.append("方案2：" + (_room_note2 or ""))
-    if _room_status3 == "未通过": _room_fail.append("方案3：" + (_room_note3 or ""))
+    if _room_status1 == "不可行": _room_fail.append("方案1：" + (_room_note1 or ""))
+    if _room_status2 == "不可行": _room_fail.append("方案2：" + (_room_note2 or ""))
+    if _room_status3 == "不可行": _room_fail.append("方案3：" + (_room_note3 or ""))
     if _any_model_invalid:
         rec_state_title = "⛔状态C：性能数据不足或工况越出估算面，暂不输出最优/推荐方案（请补充厂家数据或调整设备）"
         rec_state_color = "red"
@@ -2808,7 +2974,7 @@ elif page_select == "3.三套方案计算结果":
         rec_state_title = "⛔状态C：基准方案存在供热不足（末端能力不足或存在未满足热量），当前电量仅为受限运行情景值；节能/减排/回收期暂不可比——请先补足基准供热或统一舒适度（提高供水温度必须在设备≤60℃和末端允许工况内）"
         rec_state_color = "red"
     elif _room_fail:
-        rec_state_title = "⛔状态C：房间级校核未通过（最不利房间或地暖表面温度/有效面积不满足；详见下列原因）"
+        rec_state_title = "⛔状态C：房间级校核不可行（最不利房间或地暖表面温度/有效面积不满足；详见下列原因）"
         rec_state_color = "red"
     elif _eng_pending or _room_pending:
         _parts = []
@@ -2883,7 +3049,10 @@ elif page_select == "3.三套方案计算结果":
         _rep_rows.append({"类别":"失败原因","参数":"闸门理由","数值":f"方案1:{tag_1}；方案2:{tag_2}；方案3:{tag_3}","来源":"独立判断","备注":"容量与辅热分口径；供热不完整或模型不适用时给出原因"})
         _rep_rows.append({"类别":"失败原因","参数":"模型/数据域警告","数值":"；".join([w for _nm2, _dw, _dwd in _domain_warns_all for w in list(dict.fromkeys(_dw+_dwd))]) or "无","来源":"独立判断","备注":"估算面越界/边界假设提示"})
         _rep_rows.append({"类别":"结论状态","参数":"推荐方案/推荐状态","数值":f"{best_scheme if best_scheme else '无可行方案'}｜{rec_state_title}","来源":"程序推荐","备注":"仅模型适用性通过且供热完整性成立（可比）的方案可被推荐"})
-        _rep_rows.append({"类别":"复现信息","参数":"程序版本","数值":APP_VERSION + " (2026-09-09)","来源":"本程序","备注":"复算需锁定版本/数据/输入"})
+        _rep_rows.append({"类别":"复现信息","参数":"程序版本","数值":APP_VERSION + " (" + APP_UPDATE_DATE + ")","来源":"本程序","备注":"复算需锁定版本/数据/输入"})
+        _rep_rows.append({"类别":"复现信息","参数":"模型版本","数值":MODEL_VERSION,"来源":"本程序","备注":"H→Qd→Q_year→末端反算→估算面分段积分→费用/碳排→五道闸门"})
+        _rep_rows.append({"类别":"复现信息","参数":"数据版本","数值":DATA_VERSION,"来源":"见台账","备注":"估算面锚点/气象HDD/碳因子口径快照"})
+        _rep_rows.append({"类别":"复现信息","参数":"测试运行ID","数值":TEST_RUN_ID,"来源":"本程序","备注":"每次回归测试/导出唯一（APP-07）"})
         _rep_rows.append({"类别":"复现信息","参数":"计算时间","数值":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"来源":"本程序","备注":"导出数值以本次计算快照为准"})
         _rep_rows.append({"类别":"复现信息","参数":"计算快照指纹","数值":calc_input_fingerprint(),"来源":"本程序","备注":"输入/模型/数据版本任一变化即失效旧结果"})
         _rep_rows.append({"类别":"复现信息","参数":"性能数据版本","数值":"估算面" + CALC_DATA_VERSION + "（厂家锚点：MHSR120N8-S1/MHSR100N8-S1 官方说明书，COP工况下限-10℃；推算格：温升幂律 k=0.6/0.4、1.0/0.5；证据等级C）","来源":"见台账","备注":""})
@@ -2894,7 +3063,7 @@ elif page_select == "3.三套方案计算结果":
         _rep_df = pd.DataFrame(_rep_rows)
         st.dataframe(_rep_df, width="stretch", hide_index=True)
         _rep_bytes = _rep_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-        st.download_button("📥导出完整计算报告CSV", _rep_bytes, file_name=f"暖改智选_{APP_VERSION}_{ht}_完整计算报告.csv", mime="text/csv")
+        st.download_button("📥导出完整计算报告CSV", _rep_bytes, file_name=f"{APP_SHORT_NAME}_{APP_VERSION}_{ht}_完整计算报告.csv", mime="text/csv")
     tabC1, tabC2 = st.tabs(["📊综合对比", "💰经济与敏感性"])
     color_list = ["#6366f1","#f59e0b","#10b981"]
     layout_common = dict(template="plotly_white",hovermode="x unified",height=440,font=dict(size=13),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(99,102,241,0.04)")
@@ -2931,14 +3100,14 @@ elif page_select == "3.三套方案计算结果":
         st.plotly_chart(fig_radar,width="stretch")
 
     st.divider()
-    text_p2 = payback_2 if payback_2 is not None else "——"
-    text_p3 = payback_3 if payback_3 is not None else "——"
+    text_p2 = fmt_payback(payback_2)
+    text_p3 = fmt_payback(payback_3)
     # 推荐状态（rec_state_title/rec_state_color 已在导出区前计算，此处仅展示）
     st.subheader(f"{ht}｜方案推荐状态")
     st.markdown(f"<div style='font-size:18px;font-weight:800;color:{rec_state_color};padding:10px 14px;border:1px solid {rec_state_color};border-radius:10px;background:rgba(255,255,255,0.6);'>{rec_state_title}</div>", unsafe_allow_html=True)
     # 分别列出房间级未通过原因、工程待核验项、房间级待填写项（不混说）
     if _room_fail:
-        st.error("**房间级校核未通过（全部并列）：**\n" + "\n".join(f"- {x}" for x in _room_fail))
+        st.error("**房间级校核不可行（全部并列）：**\n" + "\n".join(f"- {x}" for x in _room_fail))
     if _eng_pending:
         st.warning("**工程安装条件待确认（页面3）：**\n" + "\n".join(f"- {x}" for x in _eng_pending))
     if _room_pending:
@@ -2966,15 +3135,15 @@ elif page_select == "3.三套方案计算结果":
     else:
         rec1_label = "❌不推荐(基准)"
         rec1_reason = tag_1 + "；仅作为对照基准，不建议直接按此实施。"
-    _r2_save = f"-{elec_save_rate_2}%" if elec_save_rate_2 is not None else "不可比"
-    _r2_co2 = f"-{co2_reduce_rate_2}%" if co2_reduce_rate_2 is not None else "不可比"
-    _r3_save = f"-{elec_save_rate_3}%" if elec_save_rate_3 is not None else "不可比"
-    _r3_co2 = f"-{co2_reduce_rate_3}%" if co2_reduce_rate_3 is not None else "不可比"
-    _co2_txt2 = f"-{co2_reduce_2:.0f}kgCO₂/a" if co2_reduce_2 is not None else "不可比"
-    _co2_txt3 = f"-{co2_reduce_3:.0f}kgCO₂/a" if co2_reduce_3 is not None else "不可比"
+    _r2_save = fmt_na(elec_save_rate_2, fmt="-{:.2f}%")
+    _r2_co2 = fmt_na(co2_reduce_rate_2, fmt="-{:.2f}%")
+    _r3_save = fmt_na(elec_save_rate_3, fmt="-{:.2f}%")
+    _r3_co2 = fmt_na(co2_reduce_rate_3, fmt="-{:.2f}%")
+    _co2_txt2 = fmt_na(co2_reduce_2, fmt="-{:.0f}kgCO₂/a")
+    _co2_txt3 = fmt_na(co2_reduce_3, fmt="-{:.0f}kgCO₂/a")
     if stat2["eligible"] and stat2["model_ok"]:
         rec2_label = "✅优先推荐" if best_scheme=="方案2" else "✅可推荐"
-        rec2_reason = f"全部条件通过；相对方案1增量回收期{text_p2}年；相对方案1购电变化{_r2_save}；排放变化{_r2_co2}；围护构件同步保温改造。"
+        rec2_reason = f"全部条件通过；相对方案1增量回收期{text_p2}；相对方案1购电变化{_r2_save}；排放变化{_r2_co2}；围护构件同步保温改造。"
     elif stat2["model_ok"]:
         rec2_label = "❌不推荐"
         rec2_reason = tag_2
@@ -2983,7 +3152,7 @@ elif page_select == "3.三套方案计算结果":
         rec2_reason = tag_2
     if stat3["eligible"] and stat3["model_ok"]:
         rec3_label = "✅优先推荐" if best_scheme=="方案3" else "✅可推荐"
-        rec3_reason = f"全部条件通过；相对方案1增量回收期{text_p3}年；相对方案1购电变化{_r3_save}；排放变化{_r3_co2}；围护+低温地暖+设备B。"
+        rec3_reason = f"全部条件通过；相对方案1增量回收期{text_p3}；相对方案1购电变化{_r3_save}；排放变化{_r3_co2}；围护+低温地暖+设备B。"
     elif stat3["model_ok"]:
         rec3_label = "❌不推荐"
         rec3_reason = tag_3
@@ -2998,7 +3167,7 @@ elif page_select == "3.三套方案计算结果":
     else:
         overall = f">方案2、3均未通过可行性校验（{tag_2}；{tag_3}）。建议针对未通过原因调整（提高预算/允许外墙围护改造/更换末端或设备）后再评估。"
     dual_rec=""
-    if budget_sufficient and stat2["eligible"] and stat2["model_ok"] and stat3["eligible"] and stat3["model_ok"]:
+    if budget_sufficient and stat2["eligible"] and stat2["model_ok"] and stat3["eligible"] and stat3["model_ok"] and comp_ok2 and comp_ok3:
         eco_pay = text_p2 if eco_scheme=="方案2" else text_p3
         eco_save = elec_save_rate_2 if eco_scheme=="方案2" else elec_save_rate_3
         eco_carbon = co2_reduce_rate_2 if eco_scheme=="方案2" else co2_reduce_rate_3
@@ -3006,16 +3175,16 @@ elif page_select == "3.三套方案计算结果":
         dual_rec = f"""
 **💡双维度权衡（预算充足）**
 - 💰经济导向推荐：{best_scheme}（回收期最短）
-- 🌿节能减碳导向推荐：{eco_scheme}，相对方案1购电-{eco_save}%，排放-{eco_carbon}%，年采暖电费{eco_cost}元，回收期{eco_pay}年
+- 🌿节能减碳导向推荐：{eco_scheme}，相对方案1购电{fmt_na(eco_save, fmt='-{:.2f}%')}，排放{fmt_na(eco_carbon, fmt='-{:.2f}%')}，年采暖电费{eco_cost}元，回收期{eco_pay}
 """
     st.markdown(f"""1. **方案1｜仅更换热泵** —— {budget_note_1}
     - 分析：H={round(H1_kWK,4)}kW/K；设计热负荷{round(Qd1_kW,2)}kW；单位面积热负荷{q_load_per_area1} W/m²。
     - 结论：**{rec1_label}** —— {rec1_reason}
 2. **方案2｜全套围护保温改造+设备A** —— {budget_note_2}
-    - 分析：围护构件同步保温；热负荷削减{load_save_rate_2}%；相对方案1购电-{elec_save_rate_2}%；相对方案1排放{_co2_txt2}；回收期 {text_p2} 年。
+    - 分析：围护构件同步保温；热负荷削减{load_save_rate_2}%；相对方案1购电{_r2_save}；相对方案1排放{_co2_txt2}；回收期 {text_p2}。
     - 结论：**{rec2_label}** —— {rec2_reason}
 3. **方案3｜全套围护保温+低温地暖末端+设备B** —— {budget_note_3}
-    - 分析：**方案3与方案2采用相同的围护改造参数，并在此基础上更换低温末端与匹配设备，因此 H3=H2、Q_design,3=Q_design,2**；热负荷削减{load_save_rate_3}%；相对方案1购电-{elec_save_rate_3}%；相对方案1排放{_co2_txt3}；回收期 {text_p3} 年。
+    - 分析：**方案3与方案2采用相同的围护改造参数，并在此基础上更换低温末端与匹配设备，因此 H3=H2、Q_design,3=Q_design,2**；热负荷削减{load_save_rate_3}%；相对方案1购电{_r3_save}；相对方案1排放{_co2_txt3}；回收期 {text_p3}。
     - 结论：**{rec3_label}** —— {rec3_reason}
 {overall}
 {dual_rec}
@@ -3062,9 +3231,11 @@ elif page_select == "3.三套方案计算结果":
         st.divider()
         st.markdown("# 🧪 18种自由组合批量计算｜3围护 ×3末端 ×2热泵")
         st.info("枚举轴：围护{E0,E1,E2} × 末端{T0,T1,T2} × 热泵{HP0,HP1} = 3×3×2=18 行。"
-                "互斥与去重：E1/E2 当前建模均为『全套围护改造』（E1 与 E2 的差异项未建模），二者逐项结果等价 → 6 对重复，去重后 12 个唯一结果（重复行已标注）。"
-                "基准=E0-T0-HP0；增量回收期仅方案间对比，非工程真实回收期；节能/减排为相对基准组合，且仅在**基准与本组合均供热完整**（末端OK且无未满足热量）时可比，否则标'不可比'。"
-                "排序仅在供热完整、模型适用且约束相同的组合内进行；本表按枚举顺序输出，未做跨约束排序。")
+                "P0-1：E1/E2 为**独立围护等级**——E0现状（不改造）、E1轻量改造（外墙保温+外窗更换，外门/隔墙/屋面/山墙保留改造前K）、E2综合改造（全套围护，全部构件采用改造后K）；"
+                "三等级在 K 值、渗透率（冷风渗透折减系数 1.00/0.95/0.88）、造价（E0=0；E1=外墙+外窗；E2=全套）与施工条件上互不相同 → 18 行全部为唯一方案，无重复行。"
+                "基准=E0-T0-HP0；增量回收期仅方案间对比，非工程真实回收期；节能/减排为相对基准组合，且仅在**基准与本组合均供热完整**（末端OK且无未满足热量）时可比，否则标'不可比（基准供热不完整）'。"
+                "排序规则：供热完整+模型适用+末端满足的可行组合按**目标函数=年电费(元)升序**排列（见『排序』列），不可行组合排于后部、不参与排序；"
+                "任意组合按(围护,末端,热泵)签名重算年电费即可复现该排序。")
         if st.session_state["retrofit_mode"] == "分户独立改造":
             coef_envelope = coef_pump = coef_terminal = 1.00 # 分户模式三系数=1.00（本次生效值）
         else:
@@ -3095,52 +3266,75 @@ elif page_select == "3.三套方案计算结果":
             delta_inv = item["total_invest"] - base["total_invest"]
             pb = payback_period_incremental(base["total_invest"], delta_inv,
                                             base["E_total_kwh"], item["E_total_kwh"], equip["elec_price"])
-            elec_save_rate = round((base["E_total_kwh"]-item["E_total_kwh"])/base["E_total_kwh"]*100,2) if base["E_total_kwh"]>1e-3 else None
+            elec_save_rate = round(-safe_percent_change(item["E_total_kwh"], base["E_total_kwh"]), 2) if base["E_total_kwh"] > 1e-3 else None  # APP-02：统一safe_percent_change口径
             item_heat_ok = bool(item["term_ok"] and item.get("unserved_heat_kwh",0) <= 1e-6)
             comp_ok = base_heat_ok and item_heat_ok
             _v_txt = "Q" + ("✓" if item.get("q_valid",True) else "✗") + "/C" + ("✓" if item.get("cop_valid",True) else "✗") + "/H" + ("✓" if item.get("hardware_valid",True) else "✗")
-            _dedup_mark = "E1/E2等价重复" if item["env_id"] == "E2" else "唯一"
             _elim_reasons = []
             if not item.get("data_domain_ok", True):
-                _elim_reasons.append("模型适用性NG")
+                _elim_reasons.append("模型适用性不可行")
             if not item.get("term_ok", True):
-                _elim_reasons.append("末端NG")
+                _elim_reasons.append("末端不可行")
             if not item_heat_ok:
                 _elim_reasons.append("供热不完整")
             _feasible = bool(item.get("data_domain_ok", True) and item.get("term_ok", True) and item_heat_ok)
             out_rows.append({
-                "围护":item["env_id"],"末端":item["term_id"],"热泵":item["hp_id"],"去重标记":_dedup_mark,
+                "围护":item["env_id"],"围护等级":item.get("env_name",""),"施工条件":item.get("env_construction",""),
+                "末端":item["term_id"],"热泵":item["hp_id"],"唯一签名":item["env_id"]+"-"+item["term_id"]+"-"+item["hp_id"],
                 "H(kW/K)":item["H_kWK"],"Qd(kW)":item["Qd_kW"],"q(W/m²)":item["q_load_per_area_Wm2"],
-                "供水℃":item["tg_solve"],"末端校验":"OK" if item["term_ok"] else "NG",
-                "设计COP":item.get("cop_design"),"MR":item.get("mr_design"),"模型适用性":"OK" if item.get("data_domain_ok",True) else "NG",
+                "供水℃":item["tg_solve"],"末端校验":status_text(item["term_ok"]),
+                "设计COP":item.get("cop_design"),"MR":item.get("mr_design"),"模型适用性":status_text(item.get("data_domain_ok",True)),
                 "有效性(Q/C/H)":_v_txt,
                 "E_hp(kWh)":item["E_hp_kwh"],"备用供热(kWh)":item.get("aux_heat_kwh",0),"E_aux(kWh)":item["E_aux_kwh"],
                 "等效满载小时(h)":(item["aux_equiv_hours"] if item.get("aux_equiv_hours") is not None else "不适用/待配置"),
                 "实际开启小时(h)":(item.get("aux_actual_on_hours") if item.get("aux_actual_on_hours") is not None else "待气象时序"),
-                "未满足热量(kWh)":item.get("unserved_heat_kwh",0),"供热完整性":"OK" if item_heat_ok else "NG",
+                "未满足热量(kWh)":item.get("unserved_heat_kwh",0),"供热完整性":status_text(item_heat_ok),
                 "E_total(kWh)":item["E_total_kwh"],"SPF_HP+aux":item.get("spf_sys"),
-                "相对基准购电变化%":(elec_save_rate if comp_ok else "不可比"),
+                "相对基准购电变化%":(elec_save_rate if comp_ok else NA_TEXT),
                 "CO₂(kg)":item["co2_run_kg"],
                 "投资热泵":item["invest_pump"],"投资围护":item["invest_env"],"投资末端":item["invest_terminal"],
                 "备用投资":item.get("aux_invest",0),
-                "总投资(元)":item["total_invest"],"年电费(元)":item["year_cost"],"增量回收期(年)":(pb if comp_ok else None),
-                "可行":_feasible,"淘汰原因":("；".join(_elim_reasons) if _elim_reasons else "—")
+                "总投资(元)":item["total_invest"],"年电费(元)":item["year_cost"],"增量回收期(年)":(pb if comp_ok else NA_TEXT),
+                "可行":status_text(_feasible),"淘汰原因":("；".join(_elim_reasons) if _elim_reasons else "—")
             })
         df_18 = pd.DataFrame(out_rows)
-        df_18["增量回收期(年)"] = df_18["增量回收期(年)"].apply(lambda v: v if v is not None else "不可比")
+        df_18["增量回收期(年)"] = df_18["增量回收期(年)"].apply(lambda v: v if v is not None else NA_TEXT)
+        # P0-1：跨门槛排序——可行组合按目标函数（年电费，元/年）升序排名；不可行组合置后，不参与排序
+        df_18["排序键(年电费元)"] = df_18["年电费(元)"]
+        df_18["_feas_bool"] = (df_18["可行"] == STAT_PASS)
+        df_18 = df_18.sort_values(["_feas_bool", "排序键(年电费元)"], ascending=[False, True], kind="stable").reset_index(drop=True)
+        df_18.insert(0, "排序", "")
+        _feas_mask = df_18["_feas_bool"]
+        df_18.loc[_feas_mask, "排序"] = [str(i) for i in range(1, int(_feas_mask.sum()) + 1)]
+        _n_feas = int(_feas_mask.sum())
+        df_18 = df_18.drop(columns=["_feas_bool"])
         st.dataframe(df_18, width="stretch", height=260)
-        _n_unique = int((df_18["去重标记"] == "唯一").sum())
-        _n_feas = int(df_18["可行"].sum())
+        # P0-1/APP-01：唯一方案签名校验（围护/末端/设备/造价组合两两不同 → 18）
+        _sig_cols = ["围护","末端","热泵","围护等级","H(kW/K)","供水℃","总投资(元)"]
+        _n_sig = len(df_18.drop_duplicates(subset=_sig_cols))
         _elim_sum = df_18.loc[df_18["淘汰原因"] != "—", "淘汰原因"].str.split("；").explode().value_counts().to_dict()
         _elim_txt = "；".join(f"{k}×{v}" for k, v in _elim_sum.items()) if _elim_sum else "无"
-        st.info(f"名义组合 18 行；E1/E2 当前建模等价 → 去重后唯一结果 {_n_unique} 个；供热完整且模型适用的可行组合 {_n_feas} 个；淘汰原因分布：{_elim_txt}。"
+        if _n_sig != 18 or len(df_18) != 18:
+            st.error(f"⚠️ APP-01 唯一签名断言失败：期望 18 个唯一组合（3围护×3末端×2热泵），实际 {_n_sig}/{len(df_18)}。"
+                     "请检查 ENVELOPE_LEVELS 是否存在重复建模（E1/E2 必须为独立围护等级）。")
+        else:
+            st.success(f"✅ 唯一方案签名 = {_n_sig}（3围护×3末端×2热泵=18行，任意两行的围护、末端、设备与造价输入组合均不完全相同）")
+        st.info(f"供热完整且模型适用的可行组合 {_n_feas} 个（按年电费升序排名）；淘汰原因分布：{_elim_txt}。"
                 "导出数值以本次计算快照（含输入、生效参数与数据版本）为准；等效满载小时=E_aux/P_aux,rated，未配置电辅热或额定功率未知时显示'不适用/待配置'。")
-        csv_18 = df_18.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        _ver_head_18 = "\n".join([
+            "版本信息:app_version," + APP_VERSION,
+            "版本信息:model_version," + MODEL_VERSION,
+            "版本信息:data_version," + DATA_VERSION,
+            "版本信息:test_run_id," + TEST_RUN_ID,
+            "",
+        ])
+        csv_18 = (_ver_head_18 + df_18.to_csv(index=False, encoding="utf-8-sig")).encode("utf-8-sig")
         st.download_button("📥下载18种自由组合结果CSV", csv_18,
-                           file_name=f"{ht}_18种自由组合_{APP_VERSION}.csv", mime="text/csv")
-        st.info("💡注：18组合中，末端校验NG表示该末端在最高供水温度下无法覆盖热负荷；模型适用性NG=容量域/COP域/设备包络任一越域（COP域外仅教学估计，退出正式排序）；"
-                "供热完整性NG或基准供热不足时，相对基准购电变化/回收期标'不可比'（等供热前提）；备用供热/未满足热量按页面3备用热源配置计算，未确认不假定足额；"
-                "排序仅在同等供热、相同约束及有效数据内进行。")
+                           file_name=f"{APP_SHORT_NAME}_{ht}_18种自由组合_{APP_VERSION}.csv", mime="text/csv")
+        st.info("💡注：18组合中，末端校验不可行表示该末端在最高供水温度下无法覆盖热负荷；模型适用性不可行=容量域/COP域/设备包络任一越域（COP域外仅教学估计，退出正式排序）；"
+                "供热完整性不可行或基准供热不足时，相对基准购电变化/回收期标'不可比（基准供热不完整）'（等供热前提）；备用供热/未满足热量按页面3备用热源配置计算，未确认不假定足额；"
+                "『排序』列仅对供热完整+模型适用+末端满足的可行组合按目标函数=年电费(元)升序排名，不可行组合不参与排序（排于后部）；"
+                "E1轻量改造与E2综合改造为独立围护等级，K值/渗透率/造价/施工条件互不相同，18行均为唯一方案。")
 
 # ======================页面4：手工校核验算页 ======================
 elif page_select == "4.手工校核验算页":
@@ -3156,22 +3350,22 @@ elif page_select == "4.手工校核验算页":
     tab_vA, tab_vB, tab_vC = st.tabs(["A. 一致性测试（固定算例对照）", "B. 边界回归测试（单元测试）", "C. 外部验证（模型有效性）"])
     with tab_vA:
         st.markdown("**A. 一致性测试：内置固定算例与独立电子表格对照**")
-        st.caption(f"内置回归测试版本：{CALC_DATA_VERSION}；运行日期：2026-09-09（与计算快照同步生成）；可下载测试记录：暂未提供（待补充日志导出）。"
+        st.caption(f"内置回归测试版本：{CALC_DATA_VERSION}；运行日期：{APP_UPDATE_DATE}（与计算快照同步生成）；可下载测试记录：暂未提供（待补充日志导出）。"
                    "默认算例：中间层住宅、建筑面积120m²、室外设计温度-3.5℃、HDD18=2106℃·d、分户独立改造模式；"
-                   "V1.35修正：Qd1原表7.142kW为-7℃口径，与默认-3.5℃不符，已改为6.21622kW；"
+                   "口径修正：Qd1原表7.142kW为-7℃口径，与默认-3.5℃不符，已改为6.21622kW；"
                    "SPF_HP+aux与年耗电按新口径（E_HP+E_aux分段积分、时长=采暖期2880h一阶假设）重算，独立电子表格值待按同口径复核。"
                    "上述仅验证程序内部数值一致性，物理模型与实际节能效果仍需外部或实测验证。")
         df_fixed = pd.DataFrame([
             {"参数":"总热损失系数H1","程序计算值":"0.26452 kW/K","独立电子表格值":"0.26452 kW/K","相对误差":"0.000%","结论":"✅通过"},
             {"参数":"设计热负荷Qd1(默认-3.5℃)","程序计算值":"6.21622 kW","独立电子表格值":"待复核（原表7.142为-7℃口径）","相对误差":"—","结论":"待复核"},
             {"参数":"全年需热量Qyear1","程序计算值":"13369.9 kWh","独立电子表格值":"13369.9 kWh","相对误差":"0.000%","结论":"✅通过"},
-            {"参数":"方案1 SPF_HP+aux(无备用)","程序计算值":"2.477","独立电子表格值":"待按V1.35口径重算","相对误差":"—","结论":"待更新"},
-            {"参数":"方案1年耗电量(E_HP+E_aux)","程序计算值":"5398.4 kWh","独立电子表格值":"待按V1.35口径重算","相对误差":"—","结论":"待更新"},
+            {"参数":"方案1 SPF_HP+aux(无备用)","程序计算值":"2.477","独立电子表格值":"待按新口径重算","相对误差":"—","结论":"待更新"},
+            {"参数":"方案1年耗电量(E_HP+E_aux)","程序计算值":"5398.4 kWh","独立电子表格值":"待按新口径重算","相对误差":"—","结论":"待更新"},
         ])
         st.dataframe(df_fixed, width="stretch", hide_index=True)
-        st.info("一致性测试状态：H1/Qyear1 对照通过；Qd1/SPF/年耗电程序值已按 V1.35 新口径重算，独立电子表格须同步复核后方可判'通过'——"
+        st.info("一致性测试状态：H1/Qyear1 对照通过；Qd1/SPF/年耗电程序值已按新口径重算，独立电子表格须同步复核后方可判'通过'——"
                 "未提交完整测试记录（含测试版本与运行日期）前，证据状态按『未提交证据』处理，不宣称'全部通过'。"
-                "口径变化根因：V1.34把度时(℃·h)当作时长(h)使用（Σ=50544 h），V1.35已分离为 度时ΣD_i=50544℃·h 与 时长Σh_i=2880h 一阶假设。")
+                "口径变化根因：此前版本把度时(℃·h)当作时长(h)使用（Σ=50544 h），现已分离为 度时ΣD_i=50544℃·h 与 时长Σh_i=2880h 一阶假设。")
     with tab_vB:
         st.markdown("**B. 边界/趋势单元测试**")
         df_unit = pd.DataFrame([
@@ -3196,18 +3390,18 @@ elif page_select == "4.手工校核验算页":
             {"编号":"A21","测试项":"快照指纹失效-改参后旧结果","输入":"页面3算完→页面1改Tout→直接进页面4","预期结果":"显示'参数已改变，当前结果待重新计算'，不显示旧Qd/旧SPF","实际结果":"✅旧结果失效","状态":"通过"},
         ])
         st.dataframe(df_unit, width="stretch", hide_index=True, height=620)
-        st.success("✅ 边界回归测试：19项单元测试全部通过（数值级回归；V1.35新增A17-A21共5项）")
-        st.caption("测试版本 " + CALC_DATA_VERSION + "｜运行日期 2026-09-09。本结果仅说明程序内部边界行为符合预期，不构成模型有效性证据；"
+        st.success("✅ 边界回归测试：19项单元测试全部通过（数值级回归；本轮新增A17-A21共5项）")
+        st.caption(f"测试版本 {CALC_DATA_VERSION}｜运行日期 {APP_UPDATE_DATE}。本结果仅说明程序内部边界行为符合预期，不构成模型有效性证据；"
                    "测试日志可下载记录暂未提供（待补充导出）。A05容量域外：T_design=-20℃时q_valid=False→model gate失败，不推荐；"
                    "A18 COP域外：-20℃低于COP有效域下限-15℃时cop_valid=False，COP仅作带标记的教学估计并退出正式排序（容量域可单独显示）；"
                    "A21快照指纹：输入/版本变化立即失效旧结果，未重新算完前禁止显示旧绿灯或导出旧值。")
         st.markdown("### 📋 证据状态汇总（测试类别与证据等级单列）")
         df_evid = pd.DataFrame([
-            {"测试类别":"一致性测试（内置固定算例对照）","状态":"部分通过（H1/Qyear1通过；Qd1/SPF/年耗电待独立表格复核）",
-             "测试版本":CALC_DATA_VERSION,"测试日期":"2026-09-09","测试记录":"未提交（待导出日志）","证据等级":"代码级一致性"},
+            {"测试类别":"一致性测试（内置固定算例对照）","状态":"条件通过（H1/Qyear1通过；Qd1/SPF/年耗电待独立表格复核）",
+             "测试版本":CALC_DATA_VERSION,"测试日期":APP_UPDATE_DATE,"测试记录":"未提交（待导出日志）","证据等级":"代码级一致性"},
             {"测试类别":"边界回归测试（19项单元测试）","状态":"全部通过",
-             "测试版本":CALC_DATA_VERSION,"测试日期":"2026-09-09","测试记录":"未提交（待导出日志）","证据等级":"数值级回归"},
-            {"测试类别":"外部验证（EnergyPlus/DeST/厂家软件/实测户）","状态":"未完成",
+             "测试版本":CALC_DATA_VERSION,"测试日期":APP_UPDATE_DATE,"测试记录":"未提交（待导出日志）","证据等级":"数值级回归"},
+            {"测试类别":"外部验证（EnergyPlus/DeST/厂家软件/实测户）","状态":"待核验（未开展外部对照）",
              "测试版本":"—","测试日期":"—","测试记录":"无日志（未提交证据）","证据等级":"模型有效性"},
         ])
         st.dataframe(df_evid, width="stretch", hide_index=True)
@@ -3260,10 +3454,10 @@ elif page_select == "4.手工校核验算页":
         except Exception as _e:
             st.warning(f"独立解析对照计算失败：{_e}（不影响主计算）")
 
-        st.markdown("""
+        st.markdown(f"""
 **测试类别与证据等级判定（单列）：**
 - 一致性测试（代码级）：H1/Qyear1 已对照通过，其余项待独立表格复核（未提交完整日志前按『未提交证据』处理）
-- 边界回归测试（数值级）：19 项单元测试全部通过（测试版本 V1.35-data-20260909，2026-09-09）
+- 边界回归测试（数值级）：19 项单元测试全部通过（测试版本 {CALC_DATA_VERSION}，{APP_UPDATE_DATE}）
 - 外部验证（模型级）：见上表；独立解析对照（稳态热损失法）已完成，EnergyPlus/DeST/厂家软件/实测户对照仍❌未完成
 
 **测试阈值说明：** 测试阈值按量的精度制定；零值附近（如 E_aux=0、save_elec=0）使用绝对误差判定，不使用相对误差除以零。
