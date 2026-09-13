@@ -23,6 +23,9 @@ UI：浅色科技风｜玻璃拟态｜清爽高亮｜大屏展示
   三个导出文件（估算面分段能耗CSV、18组合CSV、完整计算报告CSV）全部携带四个版本字段。
 - APP-08：地暖表面温度上限校验——0=未填写→待核验；有效值须高于室温（20℃室温时不接受≤20℃上限），
   输入范围与 _floor_surf_check 双重拦截。
+- 校核可用性：页面4 快照失效（改过参数/从未计算）时不再 st.stop() 卡死，自动调用 _recompute_check_mid()
+  按当前输入重算三方案校核值并生成新快照（H/Qd/Qyear/估算面分段/SPF/E 口径与页面3 一致），手工校核始终可用；
+  改动页面3 方案计算时必须同步 _recompute_check_mid。
 👉V1.38修订要点（方案B：修复"载入/删除/重置后左右页面不一致"）：
 - 根因：载入/删除/重置按钮位于侧边栏"功能页面切换"radio 之前，点击时 st.rerun() 会在 radio 实例化前中断脚本，
   Streamlit 据此把 radio 控件状态当作过期控件清空，下次渲染回落到默认页1；前端 radio 仍显示旧选中页 → 左（导航）右（内容）不一致。
@@ -532,6 +535,112 @@ def calc_snapshot_status():
     if mid.get("_fingerprint") != calc_input_fingerprint():
         return False, "参数已改变，当前结果待重新计算。校核、图表和导出将在新的计算快照生成后同步更新。"
     return True, ""
+
+def _recompute_check_mid(ht):
+    """页面4应急重算：按当前输入重新计算三方案核心校核值（与页面3计算口径一致）。
+    仅当页面3快照失效（输入/版本变化）时由页面4调用，使手工校核始终可用；
+    若改动页面3的方案计算（方案1/2/3的H/Qd/Qyear/估算面分段/SPF/E），必须同步本函数。"""
+    b = dict(st.session_state["build"])
+    e = dict(st.session_state["equip"])
+    aux_mode = st.session_state.get("_aux_mode", "无备用（不假定足额）")
+    aux_installed = float(st.session_state.get("_aux_capacity", 0.0) or 0.0)
+    aux_eta = float(st.session_state.get("_aux_eta", 1.0) or 1.0)
+    season_hours = float(st.session_state.get("_season_hours", DEFAULT_SEASON_HOURS) or DEFAULT_SEASON_HOURS)
+    aux_p_rated = float(st.session_state.get("_aux_p_rated", 0.0) or 0.0)
+    spf_include_aux = (st.session_state.get("_spf_mode", "含辅助电加热 SPF_HP+aux") == "含辅助电加热 SPF_HP+aux")
+
+    def _eff_aux(qhp_d, term_id):
+        return effective_aux_capacity(aux_mode, aux_installed, qhp_d, term_id, e, b["Tin"])
+
+    # ---- 方案1：围护不改造，散热器，HP0 ----
+    b1 = dict(b)
+    for _k in ["Kw", "Kwin", "K_door", "K_nonheat"]:
+        b1[_k] = b1[_k + "_old"]
+    if ht == "顶层边户":
+        for _k in ["K_roof", "K_gable"]:
+            b1[_k] = b1[_k + "_old"]
+    H1_kWK, _ = calc_H(ht, b1, b["volume"], b["n"], b["rho"], b["cp"])
+    Qd1_kW, _ = calc_design_load(H1_kWK, b["Tin"], b["Tout"])
+    q_year1_kwh = calc_annual_heat(H1_kWK, b["HDD"])
+    seg1_plain = calc_segment_annual_heat(H1_kWK, b["HDD"], HDD_SEGMENTS)
+    tg1, _, _, _, _ = solve_min_supply_temp(
+        Qd1_kW, b["Tin"], e["rad_Qrated_kW"], e["rad_dt_m_rated"], e["rad_m"],
+        e["rad_dt_flow_return"], e["rad_tg_max"])
+    _, qhp_d1, _, _ = hp_available_at_design(b, e, "HP0", tg1)
+    q_aux_eff1 = _eff_aux(qhp_d1, "T0")
+    seg1_full, e_hp1, e_aux1, _, _, _, _ = calc_segment_hp_aux_2d(
+        seg1_plain, "HP0", tg1, e["Qhp_rated1"],
+        q_aux_capacity=(q_aux_eff1 if q_aux_eff1 > 1e-9 else None), eta_aux=aux_eta,
+        season_hours=season_hours, p_aux_rated=aux_p_rated)
+    elec_1 = e_hp1 + e_aux1
+    spf_hp_only1 = round(q_year1_kwh / e_hp1, 3) if e_hp1 > 1e-9 else None
+    spf_with_aux1 = round(q_year1_kwh / elec_1, 3) if elec_1 > 1e-9 else None
+    spf_sys1 = spf_with_aux1 if spf_include_aux else spf_hp_only1
+
+    # ---- 方案2：围护改造（全套K改造值），散热器，HP0 ----
+    b2 = dict(b)
+    for _k in ["Kw", "Kwin", "K_door", "K_nonheat"]:
+        b2[_k] = b2[_k + "_new"]
+    if ht == "顶层边户":
+        for _k in ["K_roof", "K_gable"]:
+            b2[_k] = b2[_k + "_new"]
+    H2_kWK, _ = calc_H(ht, b2, b["volume"], b["n"], b["rho"], b["cp"])
+    Qd2_kW, _ = calc_design_load(H2_kWK, b["Tin"], b["Tout"])
+    q_year2_kwh = calc_annual_heat(H2_kWK, b["HDD"])
+    seg2_plain = calc_segment_annual_heat(H2_kWK, b["HDD"], HDD_SEGMENTS)
+    tg2, _, _, _, _ = solve_min_supply_temp(
+        Qd2_kW, b["Tin"], e["rad_Qrated_kW"], e["rad_dt_m_rated"], e["rad_m"],
+        e["rad_dt_flow_return"], e["rad_tg_max"])
+    _, qhp_d2, _, _ = hp_available_at_design(b, e, "HP0", tg2)
+    q_aux_eff2 = _eff_aux(qhp_d2, "T0")
+    seg2_full, e_hp2, e_aux2, _, _, _, _ = calc_segment_hp_aux_2d(
+        seg2_plain, "HP0", tg2, e["Qhp_rated2"],
+        q_aux_capacity=(q_aux_eff2 if q_aux_eff2 > 1e-9 else None), eta_aux=aux_eta,
+        season_hours=season_hours, p_aux_rated=aux_p_rated)
+    elec_2 = e_hp2 + e_aux2
+    spf_hp_only2 = round(q_year2_kwh / e_hp2, 3) if e_hp2 > 1e-9 else None
+    spf_with_aux2 = round(q_year2_kwh / elec_2, 3) if elec_2 > 1e-9 else None
+    spf_sys2 = spf_with_aux2 if spf_include_aux else spf_hp_only2
+
+    # ---- 方案3：围护与方案2相同，地暖末端，HP1 ----
+    H3_kWK = H2_kWK
+    Qd3_kW = Qd2_kW
+    q_year3_kwh = q_year2_kwh
+    seg3_plain = calc_segment_annual_heat(H3_kWK, b["HDD"], HDD_SEGMENTS)
+    tg3, _, _, _, _ = solve_min_supply_temp(
+        Qd3_kW, b["Tin"], e["floor_Qrated_kW"], e["floor_dt_m_rated"], e["floor_m"],
+        e["floor_dt_flow_return"], e["floor_tg_max"])
+    _, qhp_d3, _, _ = hp_available_at_design(b, e, "HP1", tg3)
+    q_aux_eff3 = _eff_aux(qhp_d3, "T2")
+    seg3_full, e_hp3, e_aux3, _, _, _, _ = calc_segment_hp_aux_2d(
+        seg3_plain, "HP1", tg3, e["Qhp_rated3"],
+        q_aux_capacity=(q_aux_eff3 if q_aux_eff3 > 1e-9 else None), eta_aux=aux_eta,
+        season_hours=season_hours, p_aux_rated=aux_p_rated)
+    elec_3 = e_hp3 + e_aux3
+    spf_hp_only3 = round(q_year3_kwh / e_hp3, 3) if e_hp3 > 1e-9 else None
+    spf_with_aux3 = round(q_year3_kwh / elec_3, 3) if elec_3 > 1e-9 else None
+    spf_sys3 = spf_with_aux3 if spf_include_aux else spf_hp_only3
+
+    return {
+        "H1_kWK": H1_kWK, "Qd1_kW": Qd1_kW, "q_year1_kwh": q_year1_kwh,
+        "H2_kWK": H2_kWK, "Qd2_kW": Qd2_kW, "q_year2_kwh": q_year2_kwh,
+        "H3_kWK": H3_kWK, "Qd3_kW": Qd3_kW, "q_year3_kwh": q_year3_kwh,
+        "spf1": calc_season_spf(e["SCOP_nameplate1"], e["spf_decay1"]),
+        "spf2": calc_season_spf(e["SCOP_nameplate2"], e["spf_decay2"]),
+        "spf3": calc_season_spf(e["SCOP_nameplate3"], e["spf_decay3"]),
+        "spf_sys1": spf_sys1, "spf_sys2": spf_sys2, "spf_sys3": spf_sys3,
+        "elec1": elec_1, "elec2": elec_2, "elec3": elec_3,
+        "seg1": seg1_full, "seg1_plain": seg1_plain,
+        "seg2": seg2_full, "seg2_plain": seg2_plain,
+        "seg3": seg3_full, "seg3_plain": seg3_plain,
+        "tg1": tg1, "tg2": tg2, "tg3": tg3,
+        "q_aux_eff1": q_aux_eff1, "q_aux_eff2": q_aux_eff2, "q_aux_eff3": q_aux_eff3,
+        "aux_eta": aux_eta, "season_hours": season_hours, "aux_p_rated": aux_p_rated,
+        "_app_version": APP_VERSION, "_data_version": CALC_DATA_VERSION,
+        "_timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "_recomputed": True,
+        "_fingerprint": calc_input_fingerprint(),
+    }
 
 def calc_terminal_max_delivery(term_id, equip_dict, Tin):
     """末端在最高允许供水温度下的最大可散热量 Q_term(tg_max)（设备包络内；V1.35，水侧电辅热的末端限制）"""
@@ -3469,7 +3578,14 @@ elif page_select == "4.手工校核验算页":
     _snap_ok, _snap_msg = calc_snapshot_status()
     if not _snap_ok:
         st.warning("⚠️" + _snap_msg)
-        st.stop()
+        # 快照失效时自动按当前输入重算校核值，保证手工校核始终可用（不展示旧快照数值）
+        try:
+            st.session_state["calc_mid"] = _recompute_check_mid(ht)
+            st.info("✅ 已按当前输入自动生成最新计算快照（替代失效旧快照），以下校核基于最新参数；"
+                    "如需闸门状态、方案卡片与导出，请到页面3查看/刷新。")
+        except Exception as _e:
+            st.error("自动重算失败：" + str(_e) + "。请先前往页面3完成计算后再回来校核。")
+            st.stop()
     mid = st.session_state["calc_mid"]
     st.caption(f"计算快照：{mid.get('_app_version','—')} / 数据版本 {mid.get('_data_version','—')} / 生成于 {mid.get('_timestamp','—')}；"
                f"输入哈希或版本任一变化，旧快照立即失效，须重访页面3生成新快照。")
